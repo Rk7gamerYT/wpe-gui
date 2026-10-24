@@ -49,13 +49,17 @@ class Tray(QObject):
         self.icon = QSystemTrayIcon(app_icon(), self)
         self.icon.setToolTip("Wallpaper Engine")
         menu = QMenu()
-        self._open = QAction("Abrir Wallpaper Engine", menu)
+        self._open = QAction("Abrir", menu)
         self._open.triggered.connect(self.show_window)
+        self._hide = QAction("Ocultar", menu)
+        self._hide.triggered.connect(self.hide_window)
         self._stop = QAction("Parar wallpapers", menu)
         self._stop.triggered.connect(engine.stop)
         quit_action = QAction("Sair", menu)
         quit_action.triggered.connect(self.quit)
         menu.addAction(self._open)
+        menu.addAction(self._hide)
+        menu.addSeparator()
         menu.addAction(self._stop)
         menu.addSeparator()
         menu.addAction(quit_action)
@@ -64,6 +68,11 @@ class Tray(QObject):
         self.icon.activated.connect(self._activated)
         engine.activeChanged.connect(lambda: self._stop.setEnabled(engine.running))
         self._stop.setEnabled(engine.running)
+
+        # Open only makes sense while the window is hidden, Hide only while it is shown
+        menu.aboutToShow.connect(self._refresh_menu)
+        window.visibleChanged.connect(self._refresh_menu)
+        self._refresh_menu()
 
         window.installEventFilter(self)  # turn "close" into "hide to the tray"
 
@@ -74,6 +83,11 @@ class Tray(QObject):
         self._server.listen(SERVER_NAME)
 
         self.icon.show()
+
+    def _refresh_menu(self):
+        shown = self._window.isVisible()
+        self._open.setEnabled(not shown)
+        self._hide.setEnabled(shown)
 
     @property
     def available(self) -> bool:

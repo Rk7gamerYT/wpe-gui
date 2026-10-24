@@ -52,3 +52,31 @@ if [ "${WPE_TRAY_ONLY:-}" = 7 ]; then
   echo -n "Alt+Tab (janelas): "; ev "global.display.get_tab_list(0, null).map(w => w.get_title()).join(' | ')"
   stop_all; sleep 2
 fi
+
+if [ "${WPE_TRAY_ONLY:-}" = 8 ]; then
+  echo "== 8. menu da bandeja (dbusmenu): Abrir / Ocultar"
+  printf '{"restoreOnStart": false, "windowed": true, "staticBackground": false}' > "$H/.config/wpe-gui/settings.json"
+  : > "$PIDS"; launch; sleep 9
+  # our StatusNotifierItem is the one whose Id is wpe-gui
+  ITEM=""; for entry in $(gdbus call --session --dest org.kde.StatusNotifierWatcher --object-path /StatusNotifierWatcher --method org.freedesktop.DBus.Properties.Get org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems | grep -oE "':[0-9.]+@[^']*'" | tr -d "'"); do
+    name=${entry%%@*}; path=${entry#*@}
+    id=$(gdbus call --session --dest "$name" --object-path "$path" --method org.freedesktop.DBus.Properties.Get org.kde.StatusNotifierItem Id 2>/dev/null | grep -oE "'wpe-gui'")
+    [ -n "$id" ] && ITEM=$name
+  done
+  echo "item da bandeja: $ITEM"
+  layout() { gdbus call --session --dest "$ITEM" --object-path /MenuBar --method com.canonical.dbusmenu.GetLayout -- 0 -1 "[]" | python3 -c "
+import re, sys
+text = sys.stdin.read()
+for m in re.finditer(r\"\\((\\d+), \\{([^{}]*)\\}, @av \\[\\]\\)\", text):
+    props = m.group(2)
+    label = re.search(r\"'label': <'([^']*)'>\", props)
+    enabled = re.search(r\"'enabled': <(true|false)>\", props)
+    kind = re.search(r\"'type': <'([^']*)'>\", props)
+    if label: print(f'  id={m.group(1)} {label.group(1)!r} ativo={enabled.group(1) if enabled else \"true\"}')
+"; }
+  press() { id=$(layout | grep -F "'$1'" | grep -oE "id=[0-9]+" | cut -d= -f2); gdbus call --session --dest "$ITEM" --object-path /MenuBar --method com.canonical.dbusmenu.Event -- "$id" clicked "<0>" 0 > /dev/null 2>&1; sleep 2; }
+  echo "-- janela aberta:"; app_windows; layout
+  echo "-- clicando em Ocultar:"; press "Ocultar"; echo -n "janela: "; app_windows; layout
+  echo "-- clicando em Abrir:"; press "Abrir"; echo -n "janela: "; app_windows; layout
+  stop_all; sleep 2
+fi
