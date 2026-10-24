@@ -99,6 +99,15 @@ fi
 echo "== minimize the wallpaper (must be restored)"
 ev "(() => { const w = global.get_window_actors().map(a => a.meta_window).find(w => w.get_title() === 'wallpaperengine'); w.minimize(); return 'minimize()'; })()"; sleep 2
 ev "(() => { const a = global.get_window_actors().find(a => a.meta_window.get_title() === 'wallpaperengine'); return 'minimized='+a.meta_window.minimized+' visible='+a.visible; })()"
+if [ -n "${WPE_XHIT:-}" ]; then
+  echo "== app X11 por cima do wallpaper: quem recebe o ponteiro?"
+  # xterm is a plain X11 client (the text editor may reuse a running Wayland instance)
+  ( export XAUTHORITY=$XA DISPLAY=$DISP; unset WAYLAND_DISPLAY; xterm -geometry 60x20+700+300 -title xterm-x11 > "$WPE_STATE/xterm.log" 2>&1 & ); sleep 4
+  ev "global.get_window_actors().map(a => a.meta_window).filter(w => !/wallpaperengine/.test(w.get_title()||'')).map(w => (w.get_title()||w.get_wm_class())+' x11='+(w.get_client_type()===1)+' rect='+w.get_frame_rect().x+','+w.get_frame_rect().y+' '+w.get_frame_rect().width+'x'+w.get_frame_rect().height).join(' | ')"
+  XY=$(ev "(() => { const w = global.get_window_actors().map(a => a.meta_window).find(w => w.get_client_type() === 1 && !/wallpaperengine/.test(w.get_title()||'')); const r = w.get_frame_rect(); return (r.x + Math.floor(r.width/2)) + ' ' + (r.y + Math.floor(r.height/2)); })()" | grep -oE "[0-9]+ [0-9]+" | head -1)
+  echo "centro do xterm: $XY"
+  XAUTHORITY=$XA DISPLAY=$DISP python3 "$(dirname "$0")/xhit.py" $XY
+fi
 echo "== tipo das janelas do motor (0=normal, 1=desktop)"
 ev "global.get_window_actors().filter(a => a.meta_window.get_title() === 'wallpaperengine').map(a => 'type='+a.meta_window.get_window_type()+' skip_taskbar='+a.meta_window.is_skip_taskbar()+' parent='+a.get_parent().constructor.name+' visible='+a.visible).join(' | ')"
 echo "== overview"; ev "Main.overview.show(); 'ok'"; sleep 3; shot "$WPE_STATE/shot-overview.png"
