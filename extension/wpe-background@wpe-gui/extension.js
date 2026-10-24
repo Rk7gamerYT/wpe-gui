@@ -29,8 +29,7 @@ export default class WpeBackground extends Extension {
         // GNOME rebuilds the per-monitor backgrounds from time to time and the new
         // background actors land on top of ours; raise the wallpaper again when it happens.
         const bg = Main.layoutManager._backgroundGroup;
-        this._childAddedId = bg.connect('child-added', (_g, child) => {
-            console.log(`[wpe-background] child-added: ${child.constructor.name}`);
+        this._childAddedId = bg.connect('child-added', () => {
             this._raiseAllLater();
         });
 
@@ -76,6 +75,24 @@ export default class WpeBackground extends Extension {
         });
     }
 
+    // The app opens each window with exactly its monitor's size, but mutter moves new windows around
+    // (work area, other monitors), so win.get_monitor() is unreliable. Match by size, then by distance.
+    _monitorIndexFor(win) {
+        const r = win.get_frame_rect();
+        let best = win.get_monitor(), bestScore = Infinity;
+        if (r.width <= 1 || r.height <= 1)
+            return best;
+        Main.layoutManager.monitors.forEach((m, i) => {
+            const score = (Math.abs(m.width - r.width) + Math.abs(m.height - r.height)) * 1000 +
+                Math.abs(m.x - r.x) + Math.abs(m.y - r.y);
+            if (score < bestScore) {
+                best = i;
+                bestScore = score;
+            }
+        });
+        return best;
+    }
+
     _toBackground(actor) {
         const bg = Main.layoutManager._backgroundGroup;
         if (actor.get_parent() !== bg) {
@@ -83,7 +100,6 @@ export default class WpeBackground extends Extension {
             actor.get_parent()?.remove_child(actor);
             bg.add_child(actor);
         } else if (bg.get_last_child() !== actor) {
-            console.log('[wpe-background] raising window actor above the new backgrounds');
             bg.set_child_above_sibling(actor, null);
         }
         actor.reactive = false;
@@ -125,14 +141,27 @@ export default class WpeBackground extends Extension {
             return;
         }
 
-        const monitor = Main.layoutManager.monitors[win.get_monitor()];
-        console.log(`[wpe-background] pinning "${win.get_title()}" on monitor ${win.get_monitor()}`);
+        const index = this._monitorIndexFor(win);
+        const monitor = Main.layoutManager.monitors[index];
+        console.log(`[wpe-background] pinning "${win.get_title()}" on monitor ${index}`);
         win.stick();
-        win.move_resize_frame(false, monitor.x, monitor.y, monitor.width, monitor.height);
         this._toBackground(actor);
 
         // A wallpaper must never stay minimized or hidden
+        const reassign = () => {
+            const info = this._pinned?.get(actor);
+            if (!info || info.placing)
+                return;
+            const idx = this._monitorIndexFor(win);
+            if (idx !== info.monitor) {
+                console.log(`[wpe-background] window moved to monitor ${idx}`);
+                info.monitor = idx;
+            }
+            this._place(actor);
+        };
         const winIds = [
+            win.connect('size-changed', reassign),
+            win.connect('position-changed', reassign),
             win.connect('notify::minimized', () => {
                 console.log(`[wpe-background] notify::minimized -> ${win.minimized}`);
                 if (win.minimized)
@@ -148,7 +177,7 @@ export default class WpeBackground extends Extension {
             }),
             actor.connect('destroy', () => this._pinned?.delete(actor)),
         ];
-        this._pinned.set(actor, {win: winIds, actor: actorIds, monitor: win.get_monitor(), placing: false});
+        this._pinned.set(actor, {win: winIds, actor: actorIds, monitor: index, placing: false});
         this._place(actor);
         actorIds.push(actor.connect('notify::position', () => {
             if (!this._pinned?.get(actor)?.placing)

@@ -3,14 +3,24 @@ ev() { gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shel
 shot() { gdbus call --session --dest org.gnome.Shell.Screenshot --object-path /org/gnome/Shell/Screenshot --method org.gnome.Shell.Screenshot.Screenshot false false "$1" > /dev/null 2>&1; }
 DISP=$(ev "GLib.getenv('DISPLAY')" | grep -oE ":[0-9]+" | head -1)
 XA=$(ev "GLib.getenv('XAUTHORITY')" | grep -oE "/[^\"']+" | head -1)
-( export XAUTHORITY=$XA DISPLAY=$DISP XDG_SESSION_TYPE=x11; unset WAYLAND_DISPLAY
-  nice -n 10 timeout 45 linux-wallpaperengine --silent --fps 15 --assets-dir "$WPE_ASSETS" \
-    --window 0x0x1920x1080 --bg "$WPE_WALLPAPER" > "$WPE_STATE/engine.log" 2>&1 & )
+# One engine window per monitor, positioned from the geometry the shell reports
+MONS=$(ev "JSON.stringify(Main.layoutManager.monitors.map(m => [m.x, m.y, m.width, m.height]))" | grep -oE "\[\[.*\]\]" | sed 's/\\//g')
+echo "== monitors: $MONS"
+# The engine accepts a single --window per process, so start one process per monitor
+i=0
+for geom in $(python3 -c "import json,sys; print(' '.join('%dx%dx%dx%d' % tuple(m) for m in json.loads(sys.argv[1])))" "$MONS"); do
+  ( export XAUTHORITY=$XA DISPLAY=$DISP XDG_SESSION_TYPE=x11; unset WAYLAND_DISPLAY
+    nice -n 10 timeout 45 linux-wallpaperengine --silent --fps 15 --assets-dir "$WPE_ASSETS" \
+      --window "$geom" --bg "$WPE_WALLPAPER" > "$WPE_STATE/engine-$i.log" 2>&1 & )
+  i=$((i+1))
+done
 sleep 8
 ( unset DISPLAY XAUTHORITY; export WAYLAND_DISPLAY=wpe-test XDG_SESSION_TYPE=wayland
   gnome-text-editor --new-window > "$WPE_STATE/editor.log" 2>&1 & )
 sleep 6
 shot "$WPE_STATE/shot-apps.png"
+echo "== wallpaper actors vs monitors"
+ev "global.get_window_actors().filter(a => a.meta_window.get_title() === 'wallpaperengine').map(a => 'actor '+a.x+','+a.y+' '+a.width+'x'+a.height+' monitor='+a.meta_window.get_monitor()+' parent='+a.get_parent().constructor.name).join(' | ')"
 echo "== layer order (bottom to top)"
 ev "Main.layoutManager._backgroundGroup.get_children().map(c => c.constructor.name+'('+c.x+','+c.y+' '+c.width+'x'+c.height+')').join(' < ')"
 echo "== minimize the wallpaper (must be restored)"
