@@ -46,12 +46,12 @@ class Engine(QObject):
             args.append("--disable-mouse")
         if not s.get("pauseOnFullscreen"):
             args.append("--no-fullscreen-pause")
-        args += ["--scaling", s.get("scaling"), "--clamping", s.get("clamping")]
+        # --scaling/--clamp/--bg apply to the preceding --window/--screen-root
         if s.get("windowed"):
             args += ["--window", s.get("windowGeometry")]
         else:
             args += ["--screen-root", screen or s.get("screen")]
-        args.append(path)
+        args += ["--scaling", s.get("scaling"), "--clamp", s.get("clamping"), "--bg", path]
         return args
 
     @Slot(str)
