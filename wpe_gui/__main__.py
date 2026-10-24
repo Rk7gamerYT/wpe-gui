@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QLockFile, QStandardPaths, QTimer, QUrl
 from PySide6.QtQml import QQmlApplicationEngine
-from PySide6.QtWidgets import QApplication  # QSystemTrayIcon needs the widgets application
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon  # the tray needs the widgets application
 
 from .engine import Engine
 from .properties import PropertiesStore
@@ -64,13 +64,17 @@ def main() -> int:
     ctx.setContextProperty("staticBackground", static_background)
     ctx.setContextProperty("library", model)
     ctx.setContextProperty("wallpapers", proxy)
+    # Start hidden in the tray (setting or --minimized), but only when there is a tray to come back from
+    start_hidden = ("--minimized" in sys.argv or settings.get("startHidden")) and QSystemTrayIcon.isSystemTrayAvailable()
+    if start_hidden:
+        qml.setInitialProperties({"visible": False})  # never show the window, instead of showing and hiding it
     qml.load(QUrl.fromLocalFile(str(Path(__file__).parent / "qml/Main.qml")))
     if not qml.rootObjects():
         return 1
     app.aboutToQuit.connect(engine.shutdown)
     tray = Tray(app, qml.rootObjects()[0], engine, settings)
-    if "--minimized" in sys.argv and tray.available:  # e.g. started with the session: live in the tray
-        tray.hide_window()
+    if start_hidden and tray.available:
+        tray.hide_window()  # in case the initial property didn't keep it hidden
     if settings.get("restoreOnStart"):
         engine.restore()
     return app.exec()

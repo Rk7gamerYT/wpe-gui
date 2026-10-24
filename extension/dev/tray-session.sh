@@ -21,10 +21,21 @@ tray_items() { ev "Object.keys(Main.panel.statusArea).filter(k => /appindicator|
 app_windows() { ev "global.get_window_actors().map(a => a.meta_window).filter(w => /Wallpaper Engine/.test(w.get_title()||'')).map(w => w.get_title()+' minimized='+w.minimized).join(' | ')"; }
 close_window() { ev "(() => { const w = global.get_window_actors().map(a => a.meta_window).find(w => /Wallpaper Engine/.test(w.get_title()||'')); if (w) w.delete(global.get_current_time()); return w ? 'ok' : 'sem janela'; })()" > /dev/null; }
 
-[ "${WPE_TRAY_ONLY:-}" = 5 ] || { echo "== 1. abre o app";                    launch;  sleep 9; alive; echo -n "janela: "; app_windows; echo -n "itens do tray: "; tray_items
+[ -n "${WPE_TRAY_ONLY:-}" ] || { echo "== 1. abre o app";                    launch;  sleep 9; alive; echo -n "janela: "; app_windows; echo -n "itens do tray: "; tray_items
 echo "== 2. fecha a janela (X)";            close_window; sleep 3; alive; echo -n "janela: "; app_windows; echo "(vazio = escondida)"
 echo "== 3. abre de novo (2o lancamento)";  launch;  sleep 4; alive; echo -n "janela: "; app_windows
 echo "== 4. fecha e encerra com SIGTERM";   close_window; sleep 2; stop_all; sleep 3; alive
 }
-echo "== 5. inicia com --minimized";        : > "$PIDS"; launch --minimized; sleep 9; alive; echo -n "janela: "; app_windows; echo "(vazio = so na bandeja)"; echo -n "itens do tray: "; tray_items
+[ "${WPE_TRAY_ONLY:-}" = 6 ] || { echo "== 5. inicia com --minimized";        : > "$PIDS"; launch --minimized; sleep 9; alive; echo -n "janela: "; app_windows; echo "(vazio = so na bandeja)"; echo -n "itens do tray: "; tray_items
 stop_all; sleep 2
+}
+
+if [ "${WPE_TRAY_ONLY:-}" = 6 ]; then
+  echo "== 6. opcao 'Iniciar escondido' ligada (sem --minimized)"
+  printf '{"restoreOnStart": false, "windowed": true, "staticBackground": false, "startHidden": true}' > "$H/.config/wpe-gui/settings.json"
+  : > "$PIDS"; launch
+  seen=0; for i in $(seq 1 45); do [ -n "$(app_windows | grep -o 'Wallpaper Engine')" ] && seen=$((seen+1)); sleep 0.2; done
+  alive; echo "vezes em que a janela apareceu durante a inicializacao: $seen (0 = nunca piscou)"; echo -n "itens do tray: "; tray_items
+  echo "-- agora abre pelo segundo lancamento:"; launch; sleep 4; echo -n "janela: "; app_windows
+  stop_all; sleep 2
+fi

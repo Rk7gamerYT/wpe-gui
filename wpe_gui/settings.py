@@ -20,6 +20,7 @@ DEFAULTS = {
     "powerSaving": "fullscreen",  # off | fullscreen | maximized
     "audioGain": 1.0,
     "closeToTray": True,  # closing the window keeps the app running in the system tray
+    "startHidden": False,  # open straight into the tray, without showing the window
     "staticBackground": True,  # keep a still picture of the wallpaper as the desktop background
     "staticSignature": "",
     "originalBackground": {},

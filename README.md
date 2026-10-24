@@ -14,7 +14,7 @@ Versão inicial (0.1). Já faz:
 - Ajustes por wallpaper: escala, bordas e as propriedades do próprio wallpaper (sliders, cores, listas...)
 - Restaura os wallpapers ao abrir o app
 - **Modo economia:** pausa o wallpaper só no monitor que tiver um app em tela cheia ou maximizado (no GNOME, pela extensão)
-- **Bandeja do sistema:** fechar a janela mantém o app e os wallpapers rodando; o ícone abre a interface de novo (no GNOME, usa a extensão AppIndicator, já ativa no Ubuntu)
+- **Bandeja do sistema:** fechar a janela mantém o app e os wallpapers rodando; o ícone abre a interface de novo (há a opção "Iniciar escondido na bandeja") (no GNOME, usa a extensão AppIndicator, já ativa no Ubuntu)
 - **Fundo estático:** ao fechar o app, o desktop fica com uma imagem do wallpaper em vez de voltar ao fundo antigo (GNOME)
 - **Intensidade do áudio:** global e por wallpaper, para os que reagem ao som
 - Configurações: FPS, volume, mudo, escala, pausa em tela cheia, modo janela

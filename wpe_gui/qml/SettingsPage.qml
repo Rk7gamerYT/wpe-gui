@@ -192,5 +192,16 @@ ScrollView {
             text: "Fechar a janela deixa o app e os wallpapers rodando na bandeja do sistema. Para abrir de novo, clique no ícone."
         }
 
+        Label { text: "Iniciar escondido na bandeja" }
+        Switch { checked: settings.value("startHidden"); onToggled: settings.set("startHidden", checked) }
+        Label {
+            Layout.columnSpan: 2
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            opacity: 0.6
+            font.pixelSize: 11
+            text: "O app abre só com o ícone na bandeja, sem mostrar a janela. Combine com “Iniciar com o sistema” e “Restaurar wallpapers ao abrir o app”."
+        }
+
     }
 }
