@@ -98,4 +98,6 @@ fi
 echo "== minimize the wallpaper (must be restored)"
 ev "(() => { const w = global.get_window_actors().map(a => a.meta_window).find(w => w.get_title() === 'wallpaperengine'); w.minimize(); return 'minimize()'; })()"; sleep 2
 ev "(() => { const a = global.get_window_actors().find(a => a.meta_window.get_title() === 'wallpaperengine'); return 'minimized='+a.meta_window.minimized+' visible='+a.visible; })()"
+echo "== tipo das janelas do motor (0=normal, 1=desktop)"
+ev "global.get_window_actors().filter(a => a.meta_window.get_title() === 'wallpaperengine').map(a => 'type='+a.meta_window.get_window_type()+' skip_taskbar='+a.meta_window.is_skip_taskbar()+' parent='+a.get_parent().constructor.name+' visible='+a.visible).join(' | ')"
 echo "== overview"; ev "Main.overview.show(); 'ok'"; sleep 3; shot "$WPE_STATE/shot-overview.png"

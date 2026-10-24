@@ -12,6 +12,7 @@ from wpe_gui.engine import Engine
 from wpe_gui.powersaver import PowerSaver
 from wpe_gui.properties import PropertiesStore
 from wpe_gui.settings import Settings
+from wpe_gui.x11hints import WindowHider
 from wpe_gui.staticbackground import OUTPUT_DIR, StaticBackground, gsettings
 
 app = QGuiApplication(sys.argv)
@@ -27,6 +28,7 @@ settings.set("powerSaving", os.environ.get("WPE_POWER", "maximized"))
 engine.message.connect(lambda m: print("MESSAGE:", m, flush=True))
 powersaver = PowerSaver(settings, engine)
 static = StaticBackground(settings, engine)
+hider = WindowHider(engine)
 static.updated.connect(lambda: print('STATIC updated:', sorted(p.name for p in OUTPUT_DIR.glob('*.png')), flush=True))
 
 first, second = os.environ["WPE_WALLPAPER"], os.environ.get("WPE_WALLPAPER2", os.environ["WPE_WALLPAPER"])

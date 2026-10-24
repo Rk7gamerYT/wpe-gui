@@ -11,6 +11,7 @@ from .engine import Engine
 from .properties import PropertiesStore
 from .powersaver import PowerSaver
 from .staticbackground import StaticBackground
+from .x11hints import WindowHider
 from .models import WallpaperFilter, WallpaperModel
 from .settings import Settings
 
@@ -34,6 +35,7 @@ def main() -> int:
     properties.changed.connect(engine.propertiesChanged)
     powersaver = PowerSaver(settings, engine)  # noqa: F841 (kept alive by the local reference)
     static_background = StaticBackground(settings, engine)
+    window_hider = WindowHider(engine)  # noqa: F841 (kept alive by the local reference)
     model = WallpaperModel(settings)
     proxy = WallpaperFilter()
     proxy.setSourceModel(model)
