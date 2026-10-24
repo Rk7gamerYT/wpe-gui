@@ -1,3 +1,4 @@
+if [ -n "${WPE_TRAY_TEST:-}" ]; then bash "$(dirname "$0")/tray-session.sh"; exit 0; fi
 # Runs inside the throwaway session (see test-shell.sh): starts the engine and an ordinary app, then reports.
 ev() { gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval "$1" 2>&1 | cut -c1-500; }
 shot() { gdbus call --session --dest org.gnome.Shell.Screenshot --object-path /org/gnome/Shell/Screenshot --method org.gnome.Shell.Screenshot.Screenshot false false "$1" > /dev/null 2>&1; }

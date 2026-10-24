@@ -19,7 +19,7 @@ touch "$WPE_STATE/Desktop/Documento.txt"; mkdir -p "$WPE_STATE/Desktop/Projetos"
 printf 'XDG_DESKTOP_DIR="%s/Desktop"\n' "$WPE_STATE" > "$WPE_STATE/config/user-dirs.dirs"
 cat > "$WPE_STATE/config/glib-2.0/settings/keyfile" <<KEYS
 [org/gnome/shell]
-enabled-extensions=['$UUID', 'ding@rastersoft.com']
+enabled-extensions=['$UUID', 'ding@rastersoft.com'${WPE_EXTENSIONS:+, $WPE_EXTENSIONS}]
 disable-user-extensions=false
 welcome-dialog-last-shown-version='99'
 KEYS

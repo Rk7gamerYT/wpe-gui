@@ -181,5 +181,16 @@ ScrollView {
             onClicked: staticBackground.restoreOriginal()
         }
 
+        Label { text: "Manter na bandeja ao fechar" }
+        Switch { checked: settings.value("closeToTray"); onToggled: settings.set("closeToTray", checked) }
+        Label {
+            Layout.columnSpan: 2
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            opacity: 0.6
+            font.pixelSize: 11
+            text: "Fechar a janela deixa o app e os wallpapers rodando na bandeja do sistema. Para abrir de novo, clique no ícone."
+        }
+
     }
 }

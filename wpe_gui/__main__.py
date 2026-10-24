@@ -4,8 +4,8 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QLockFile, QStandardPaths, QTimer, QUrl
-from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtWidgets import QApplication  # QSystemTrayIcon needs the widgets application
 
 from .engine import Engine
 from .properties import PropertiesStore
@@ -17,9 +17,17 @@ from .settings import Settings
 
 
 def main() -> int:
-    app = QGuiApplication(sys.argv)
+    if "--install-desktop" in sys.argv or "--uninstall-desktop" in sys.argv:
+        from . import desktop_entry
+        done = desktop_entry.install() if "--install-desktop" in sys.argv else desktop_entry.uninstall()
+        verb = "instalado" if "--install-desktop" in sys.argv else "removido"
+        print(f"{len(done)} arquivos {verb}s em ~/.local/share:", *[f"  {p}" for p in done], sep="\n")
+        return 0
+
+    app = QApplication(sys.argv)
     app.setApplicationName("wpe-gui")
     app.setDesktopFileName("wpe-gui")
+    app.setQuitOnLastWindowClosed(False)  # hiding the window to the tray must not end the app (see tray.py)
     # Quit properly on SIGTERM (logout, `kill`) and Ctrl+C: the default action would end this process and
     # leave the engines it started running with nobody to stop them
     signal.signal(signal.SIGINT, lambda *_: app.quit())
@@ -32,7 +40,8 @@ def main() -> int:
     runtime = QStandardPaths.writableLocation(QStandardPaths.RuntimeLocation) or "/tmp"
     lock = QLockFile(os.path.join(runtime, "wpe-gui.lock"))
     if not lock.tryLock(200):
-        print("wpe-gui já está aberto.", file=sys.stderr)
+        if not ask_running_instance_to_show():  # normally the running app just brings its window up
+            print("wpe-gui já está aberto.", file=sys.stderr)
         return 0
 
     settings = Settings()
@@ -59,6 +68,9 @@ def main() -> int:
     if not qml.rootObjects():
         return 1
     app.aboutToQuit.connect(engine.shutdown)
+    tray = Tray(app, qml.rootObjects()[0], engine, settings)
+    if "--minimized" in sys.argv and tray.available:  # e.g. started with the session: live in the tray
+        tray.hide_window()
     if settings.get("restoreOnStart"):
         engine.restore()
     return app.exec()

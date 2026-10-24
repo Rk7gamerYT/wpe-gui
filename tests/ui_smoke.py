@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from PySide6.QtCore import QTimer, QUrl, qInstallMessageHandler
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import QApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
 from wpe_gui.engine import Engine
@@ -25,7 +25,7 @@ except ImportError:
 
 messages = []
 qInstallMessageHandler(lambda mode, ctx, text: messages.append(text))
-app = QGuiApplication(sys.argv)
+app = QApplication(sys.argv)
 tmp = Path(tempfile.mkdtemp())
 settings = Settings(tmp / "settings.json")
 properties = PropertiesStore(tmp / "overrides.json")

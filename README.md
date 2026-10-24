@@ -14,17 +14,20 @@ Versão inicial (0.1). Já faz:
 - Ajustes por wallpaper: escala, bordas e as propriedades do próprio wallpaper (sliders, cores, listas...)
 - Restaura os wallpapers ao abrir o app
 - **Modo economia:** pausa o wallpaper só no monitor que tiver um app em tela cheia ou maximizado (no GNOME, pela extensão)
+- **Bandeja do sistema:** fechar a janela mantém o app e os wallpapers rodando; o ícone abre a interface de novo (no GNOME, usa a extensão AppIndicator, já ativa no Ubuntu)
 - **Fundo estático:** ao fechar o app, o desktop fica com uma imagem do wallpaper em vez de voltar ao fundo antigo (GNOME)
 - **Intensidade do áudio:** global e por wallpaper, para os que reagem ao som
 - Configurações: FPS, volume, mudo, escala, pausa em tela cheia, modo janela
 
-Planejado: playlists, bandeja do sistema, iniciar com a sessão, Workshop.
+Planejado: playlists, iniciar com a sessão, Workshop.
 
 ## Executar
 
 ```bash
 ./wpe-gui.sh
 ```
+
+Para ter o ícone e a entrada no menu de aplicativos (o dock deixa de mostrar uma engrenagem), rode uma vez `./wpe-gui.sh --install-desktop`; `--uninstall-desktop` remove. Com `--minimized` o app inicia só na bandeja.
 
 Na primeira vez o script cria o ambiente Python (`.venv`) e instala a dependência sozinho. Para abrir de qualquer pasta, crie um link no seu `PATH`:
 
