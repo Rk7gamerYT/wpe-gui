@@ -28,6 +28,7 @@ class Engine(QObject):
         self._reapply = QTimer(self, singleShot=True, interval=500)
         self._reapply.timeout.connect(self._reapply_pending)
         self._pending: set[str] = set()
+        self._silent: dict[str, bool] = {}  # target key -> whether its process was started with --silent
 
     # -- state exposed to QML ------------------------------------------------------------------
 
@@ -81,13 +82,13 @@ class Engine(QObject):
         custom = self._settings.get("enginePath")
         return custom if custom else shutil.which("linux-wallpaperengine")
 
-    def build_args(self, path: str, target: str) -> list[str]:
+    def build_args(self, path: str, target: str, audible: bool = True) -> list[str]:
         s = self._settings
         args = ["--fps", str(s.get("fps"))]
         assets = s.get("assetsDir") or (str(a) if (a := library.default_assets_dir()) else "")
         if assets:
             args += ["--assets-dir", assets]
-        if s.get("silent"):
+        if s.get("silent") or not audible:
             args.append("--silent")
         else:
             args += ["--volume", str(s.get("volume"))]
@@ -119,6 +120,29 @@ class Engine(QObject):
         ]
         return args + self._properties.engine_args(path)
 
+    # -- audio ---------------------------------------------------------------------------------
+
+    def _audible_key(self, keys) -> str | None:
+        """Only one wallpaper plays sound: the engine mutes itself when it sees *another process* playing audio
+        (it even counts a sibling engine process), so several audible processes would silence each other."""
+        keys = sorted(keys)
+        if not keys:
+            return None
+        if SPAN in keys:
+            return SPAN
+        primary = QGuiApplication.primaryScreen().name()
+        return primary if primary in keys else keys[0]
+
+    def _rebalance_audio(self):
+        """After monitors were added or removed, make sure exactly one process is the audible one."""
+        audible = self._audible_key(self._assignments)
+        for key in list(self._procs):
+            if self._silent.get(key) != (key != audible):
+                path = self._assignments.get(key)
+                if path:
+                    self._stop_keys([key])
+                    self._start(key, path, planned=set(self._assignments) | {key})
+
     # -- starting and stopping -----------------------------------------------------------------
 
     def _targets_for(self, target: str) -> list[str]:
@@ -147,11 +171,15 @@ class Engine(QObject):
         else:
             self._stop_keys([SPAN])
         self._stop_keys(keys)
+        planned = set(self._assignments) | set(keys)
         for key in keys:
-            self._start(key, path)
+            self._start(key, path, planned)
+        self._rebalance_audio()
         self._remember()
 
-    def _start(self, key: str, path: str):
+    def _start(self, key: str, path: str, planned=None):
+        planned = planned if planned is not None else set(self._assignments) | {key}
+        silent = key != self._audible_key(planned)
         proc = QProcess(self)
         if self._settings.get("windowed"):
             # GLEW can't initialise on native Wayland; run the window through XWayland
@@ -162,7 +190,8 @@ class Engine(QObject):
         proc.setProcessChannelMode(QProcess.MergedChannels)
         proc.finished.connect(lambda code, _s, k=key, p=proc: self._on_finished(k, p, code))
         proc.errorOccurred.connect(lambda _e: self.message.emit("Falha ao iniciar o motor."))
-        proc.start(self.binary(), self.build_args(path, key))
+        proc.start(self.binary(), self.build_args(path, key, audible=not silent))
+        self._silent[key] = silent
         self._procs[key] = proc
         self._assignments[key] = path
         self.activeChanged.emit()
@@ -192,6 +221,7 @@ class Engine(QObject):
     def stopPath(self, path: str):
         """Stop this wallpaper on every monitor it runs on, leaving the others alone."""
         self._stop_keys([k for k, p in self._assignments.items() if p == path])
+        self._rebalance_audio()
         self._remember()
 
     def _remember(self):
@@ -202,9 +232,9 @@ class Engine(QObject):
         """Start again what was running last time the app was open."""
         saved = self._settings.get("assignments") or {}
         names = set(self._screens_by_name())
-        for key, path in saved.items():
-            if (key == SPAN or key in names) and Path(path).is_dir():
-                self._start(key, path)
+        valid = {k: p for k, p in saved.items() if (k == SPAN or k in names) and Path(p).is_dir()}
+        for key, path in valid.items():
+            self._start(key, path, planned=set(valid))
 
     @Slot(str)
     def propertiesChanged(self, path: str):
@@ -220,7 +250,7 @@ class Engine(QObject):
             path = self._assignments.get(key)
             if path:
                 self._stop_keys([key])
-                self._start(key, path)
+                self._start(key, path, planned=set(self._assignments) | {key})
 
     def _on_finished(self, key, proc, code):
         out = bytes(proc.readAll()).decode(errors="replace").strip().splitlines()
@@ -228,6 +258,7 @@ class Engine(QObject):
             del self._procs[key]
             self._assignments.pop(key, None)
             self.activeChanged.emit()
+            self._rebalance_audio()
         if code != 0:
             tail = out[-1] if out else ""
             self.message.emit(f"O motor encerrou com código {code}. {tail}")

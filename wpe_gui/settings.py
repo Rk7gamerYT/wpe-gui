@@ -14,7 +14,7 @@ DEFAULTS = {
     "fps": 30,
     "volume": 100,
     "silent": False,
-    "autoMute": True,
+    "autoMute": False,
     "disableMouse": False,
     "pauseOnFullscreen": True,
     "scaling": "default",

@@ -25,8 +25,8 @@ print(' '.join('%dx%dx%dx%d' % tuple(m) for m in mons))" "$MONS" "${WPE_LAYOUT:-
 echo "== geometries: $GEOMS"
 for geom in $GEOMS; do
   ( export XAUTHORITY=$XA DISPLAY=$DISP XDG_SESSION_TYPE=x11; unset WAYLAND_DISPLAY
-    nice -n 10 timeout 45 linux-wallpaperengine --silent --fps 15 --assets-dir "$WPE_ASSETS" \
-      --window "$geom" --bg "$WPE_WALLPAPER" > "$WPE_STATE/engine-$i.log" 2>&1 & )
+    nice -n 10 timeout 45 linux-wallpaperengine ${WPE_SILENT---silent} --fps 15 --assets-dir "$WPE_ASSETS" \
+      --window "$geom" --bg "$WPE_WALLPAPER" ${WPE_ENGINE_ARGS:-} > "$WPE_STATE/engine-$i.log" 2>&1 & )
   i=$((i+1))
 done
 fi
@@ -35,6 +35,15 @@ sleep 8
   gnome-text-editor --new-window > "$WPE_STATE/editor.log" 2>&1 & )
 sleep 6
 shot "$WPE_STATE/shot-apps.png"
+echo "== audio streams (PipeWire)"
+pw-dump 2>/dev/null | python3 -c "
+import json,sys
+for o in json.load(sys.stdin):
+    i=o.get('info',{}); p=i.get('props',{})
+    if p.get('media.class')=='Stream/Output/Audio':
+        props=[x for x in i.get('params',{}).get('Props',[])]
+        print(p.get('application.name'), '| state=%s' % i.get('state'), '| mute/vol:', [(x.get('mute'), x.get('volume'), x.get('channelVolumes')) for x in props][:1], '| node.dont-reconnect/target:', p.get('target.object'))
+"
 echo "== wallpaper actors vs monitors"
 ev "global.get_window_actors().filter(a => a.meta_window.get_title() === 'wallpaperengine').map(a => 'actor '+a.x+','+a.y+' '+a.width+'x'+a.height+' monitor='+a.meta_window.get_monitor()+' parent='+a.get_parent().constructor.name).join(' | ')"
 echo "== app.log"; cat "$WPE_STATE/app.log" 2>/dev/null | cut -c1-300

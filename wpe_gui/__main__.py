@@ -1,8 +1,9 @@
+import os
 import signal
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QLockFile, QStandardPaths, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -17,6 +18,13 @@ def main() -> int:
     app.setApplicationName("wpe-gui")
     app.setDesktopFileName("wpe-gui")
     signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+    # One instance only: each one would restore the saved wallpapers and the engines would pile up
+    runtime = QStandardPaths.writableLocation(QStandardPaths.RuntimeLocation) or "/tmp"
+    lock = QLockFile(os.path.join(runtime, "wpe-gui.lock"))
+    if not lock.tryLock(200):
+        print("wpe-gui já está aberto.", file=sys.stderr)
+        return 0
 
     settings = Settings()
     properties = PropertiesStore()
