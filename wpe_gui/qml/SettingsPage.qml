@@ -91,14 +91,49 @@ ScrollView {
             onMoved: settings.set("volume", Math.round(value))
         }
 
+        Label { text: "Intensidade do áudio (padrão)" }
+        RowLayout {
+            Layout.fillWidth: true
+            Slider {
+                id: gainDefault
+                Layout.fillWidth: true
+                from: 0; to: 300; stepSize: 5
+                value: 100 * settings.value("audioGain")
+                onPressedChanged: if (!pressed) settings.set("audioGain", value / 100)
+            }
+            Label { text: Math.round(gainDefault.value) + "%"; Layout.preferredWidth: 38; horizontalAlignment: Text.AlignRight }
+        }
+        Label {
+            Layout.columnSpan: 2
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            opacity: 0.6
+            font.pixelSize: 11
+            text: "Vale para wallpapers que reagem ao som. Cada wallpaper pode ter a sua, no painel da direita."
+        }
+
         Label { text: "Silenciar" }
         Switch { checked: settings.value("silent"); onToggled: settings.set("silent", checked) }
 
         Label { text: "Silenciar quando outro app tocar áudio" }
         Switch { checked: settings.value("autoMute"); onToggled: settings.set("autoMute", checked) }
 
-        Label { text: "Pausar com app em tela cheia" }
-        Switch { checked: settings.value("pauseOnFullscreen"); onToggled: settings.set("pauseOnFullscreen", checked) }
+        Label { text: "Modo economia" }
+        ComboBox {
+            Layout.fillWidth: true
+            readonly property var values: ["off", "fullscreen", "maximized"]
+            model: ["Desligado", "Pausar com app em tela cheia", "Pausar com app maximizado ou em tela cheia"]
+            currentIndex: Math.max(0, values.indexOf(settings.value("powerSaving")))
+            onActivated: settings.set("powerSaving", values[currentIndex])
+        }
+        Label {
+            Layout.columnSpan: 2
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            opacity: 0.6
+            font.pixelSize: 11
+            text: "O wallpaper é pausado só no monitor que tiver o app. No GNOME isso depende da extensão instalada."
+        }
 
         Label { text: "Desativar interação do mouse" }
         Switch { checked: settings.value("disableMouse"); onToggled: settings.set("disableMouse", checked) }

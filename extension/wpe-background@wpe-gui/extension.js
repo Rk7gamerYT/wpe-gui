@@ -1,10 +1,19 @@
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
 import {Extension, InjectionManager} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Workspace from 'resource:///org/gnome/shell/ui/workspace.js';
 
 // Window title/class used by linux-wallpaperengine (GLFW)
 const TITLE = 'wallpaperengine';
+
+const DBUS_NAME = 'org.wpegui.Background';
+const DBUS_PATH = '/org/wpegui/Background';
+const DBUS_XML = `<node><interface name="${DBUS_NAME}">
+  <method name="GetCovered"><arg type="s" direction="out" name="json"/></method>
+  <signal name="CoveredChanged"><arg type="s" name="json"/></signal>
+</interface></node>`;
 
 const isEngine = win =>
     win && (win.get_title() === TITLE || win.get_wm_class() === 'linux-wallpaperengine');
@@ -44,10 +53,36 @@ export default class WpeBackground extends Extension {
         });
         this._mapId = global.window_manager.connect('map', (_wm, actor) => this._maybePin(actor));
         global.get_window_actors().forEach(a => this._maybePin(a));
+
+        // Tell the app which monitors have a maximized or fullscreen window, so it can pause the wallpaper there
+        this._coveredJson = '{"maximized":[],"fullscreen":[]}';
+        this._dbus = Gio.DBusExportedObject.wrapJSObject(DBUS_XML, this);
+        this._dbus.export(Gio.DBus.session, DBUS_PATH);
+        this._busId = Gio.bus_own_name_on_connection(Gio.DBus.session, DBUS_NAME, Gio.BusNameOwnerFlags.NONE, null, null);
+        this._coverageSignals = [
+            [global.window_manager, ['map', 'destroy', 'minimize', 'unminimize', 'size-changed', 'switch-workspace']],
+            [global.display, ['restacked', 'in-fullscreen-changed', 'window-entered-monitor', 'window-left-monitor']],
+            [Main.layoutManager, ['monitors-changed']],
+        ].flatMap(([obj, names]) => names.map(n => [obj, obj.connect(n, () => this._updateCoverageLater())]));
+        this._updateCoverage();
+    }
+
+    GetCovered() {
+        return this._coveredJson;
     }
 
     disable() {
         global.window_manager.disconnect(this._mapId);
+        for (const [obj, id] of this._coverageSignals)
+            obj.disconnect(id);
+        this._coverageSignals = null;
+        if (this._coverageTimeout) {
+            GLib.source_remove(this._coverageTimeout);
+            this._coverageTimeout = null;
+        }
+        this._dbus.unexport();
+        this._dbus = null;
+        Gio.bus_unown_name(this._busId);
         Main.layoutManager.disconnect(this._monitorsId);
         global.display.disconnect(this._restackId);
         Main.layoutManager._backgroundGroup.disconnect(this._childAddedId);
@@ -58,12 +93,54 @@ export default class WpeBackground extends Extension {
         this._injections.clear();
         this._injections = null;
         for (const [actor, ids] of this._pinned) {
+            // Disconnect first: restoring reactivity must not trigger our guard.
+            for (const [child, state] of ids.input)
+                state.signals.forEach(id => child.disconnect(id));
+            for (const [child, state] of ids.input)
+                child.reactive = state.reactive;
             const win = actor.meta_window;
             if (win)
                 ids.win.forEach(id => win.disconnect(id));
             ids.actor.forEach(id => actor.disconnect(id));
         }
         this._pinned = null;
+    }
+
+    _updateCoverageLater() {
+        if (this._coverageTimeout)
+            return;
+        this._coverageTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 120, () => {
+            this._coverageTimeout = null;
+            this._updateCoverage();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // Monitors (as [x, y, width, height]) with a visible maximized / fullscreen window of an ordinary app
+    _updateCoverage() {
+        const monitors = Main.layoutManager.monitors;
+        const workspace = global.workspace_manager.get_active_workspace();
+        const maximized = new Set(), fullscreen = new Set();
+        for (const actor of global.get_window_actors()) {
+            const win = actor.meta_window;
+            if (isEngine(win) || win.get_window_type() !== Meta.WindowType.NORMAL || win.minimized)
+                continue;
+            if (!win.located_on_workspace(workspace))
+                continue;
+            const monitor = win.get_monitor();
+            if (win.is_fullscreen())
+                fullscreen.add(monitor);
+            if (win.maximized_horizontally && win.maximized_vertically)
+                maximized.add(monitor);
+        }
+        const rects = set => [...set].filter(i => monitors[i])
+            .map(i => [monitors[i].x, monitors[i].y, monitors[i].width, monitors[i].height]);
+        const json = JSON.stringify({maximized: rects(maximized), fullscreen: rects(fullscreen)});
+        if (json === this._coveredJson)
+            return;
+        this._coveredJson = json;
+        console.log(`[wpe-background] covered: ${json}`);
+        this._dbus?.emit_signal('CoveredChanged', new GLib.Variant('(s)', [json]));
     }
 
     _raiseAllLater() {
@@ -113,8 +190,34 @@ export default class WpeBackground extends Extension {
         } else if (bg.get_last_child() !== actor) {
             bg.set_child_above_sibling(actor, null);
         }
-        actor.reactive = false;
+        this._makeClickThrough(actor);
         actor.show();
+    }
+
+    _makeClickThrough(actor) {
+        const info = this._pinned.get(actor);
+        if (!info)
+            return;
+        const visit = child => {
+            if (info.input.has(child))
+                return;
+            const state = {reactive: child.reactive, signals: []};
+            info.input.set(child, state);
+            state.signals.push(
+                child.connect('notify::reactive', () => {
+                    if (child.reactive)
+                        child.reactive = false;
+                }),
+                child.connect('child-added', (_parent, added) => visit(added)),
+                child.connect('destroy', () => info.input.delete(child)),
+            );
+            // A non-reactive parent does not exclude its reactive children from
+            // Clutter picking. MetaSurfaceActor still intercepts clicks unless
+            // the entire window subtree is non-reactive.
+            child.reactive = false;
+            child.get_children().forEach(visit);
+        };
+        visit(actor);
     }
 
     // Mutter keeps normal windows out of the top bar's strut, which pushes the wallpaper 32px down.
@@ -185,7 +288,8 @@ export default class WpeBackground extends Extension {
             }),
             actor.connect('destroy', () => this._pinned?.delete(actor)),
         ];
-        this._pinned.set(actor, {win: winIds, actor: actorIds, target, placing: false});
+        this._pinned.set(actor, {win: winIds, actor: actorIds, target, placing: false, input: new Map()});
+        this._makeClickThrough(actor);
         this._place(actor);
         actorIds.push(actor.connect('notify::position', () => {
             if (!this._pinned?.get(actor)?.placing)

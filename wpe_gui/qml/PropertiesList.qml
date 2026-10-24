@@ -8,6 +8,7 @@ ColumnLayout {
     id: root
     property string folder: ""
     property var items: []
+    readonly property bool audioResponsive: folder !== "" && properties.audioResponsive(folder)
     spacing: 10
 
     function reload() { items = folder ? properties.load(folder) : [] }
@@ -34,6 +35,21 @@ ColumnLayout {
             model: ["Padrão", "Esticar", "Ajustar", "Preencher"]
             currentIndex: Math.max(0, values.indexOf(properties.engineOption(root.folder, "scaling")))
             onActivated: properties.setEngineOption(root.folder, "scaling", values[currentIndex])
+        }
+        // Only wallpapers that react to the sound playing on the computer get this
+        Label { text: "Intensidade do áudio"; visible: root.audioResponsive }
+        RowLayout {
+            visible: root.audioResponsive
+            Layout.fillWidth: true
+            Slider {
+                id: gainSlider
+                Layout.fillWidth: true
+                from: 0; to: 300; stepSize: 5
+                value: 100 * parseFloat(properties.engineOption(root.folder, "audioGain") || settings.value("audioGain"))
+                onPressedChanged: if (!pressed) properties.setEngineOption(root.folder, "audioGain", String(value / 100))
+                onMoved: if (!pressed) properties.setEngineOption(root.folder, "audioGain", String(value / 100))
+            }
+            Label { text: Math.round(gainSlider.value) + "%"; Layout.preferredWidth: 38; horizontalAlignment: Text.AlignRight }
         }
         Label { text: "Bordas" }
         ComboBox {

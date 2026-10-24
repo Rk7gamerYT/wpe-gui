@@ -9,6 +9,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QGuiApplication
 
 from wpe_gui.engine import Engine
+from wpe_gui.powersaver import PowerSaver
 from wpe_gui.properties import PropertiesStore
 from wpe_gui.settings import Settings
 
@@ -21,7 +22,9 @@ settings.set("fps", 15)
 settings.set("assetsDir", os.environ["WPE_ASSETS"])
 settings.set("layout", os.environ.get("WPE_LAYOUT", "independent"))
 engine = Engine(settings, PropertiesStore(tmp / "overrides.json"))
+settings.set("powerSaving", os.environ.get("WPE_POWER", "maximized"))
 engine.message.connect(lambda m: print("MESSAGE:", m, flush=True))
+powersaver = PowerSaver(settings, engine)
 
 first, second = os.environ["WPE_WALLPAPER"], os.environ.get("WPE_WALLPAPER2", os.environ["WPE_WALLPAPER"])
 names = engine.screenNames()

@@ -172,6 +172,11 @@ class PropertiesStore(QObject):
 
     ENGINE_KEY = "_engine"
     ENGINE_CHOICES = {"scaling": ("default", "stretch", "fit", "fill"), "clamping": ("clamp", "border", "repeat")}
+    ENGINE_NUMERIC = {"audioGain": (0.0, 4.0)}  # audio reaction intensity, 1.0 = unchanged
+
+    @Slot(str, result=bool)
+    def audioResponsive(self, folder):
+        return library.audio_responsive(folder)
 
     def engine_options(self, folder: str) -> dict:
         return dict(self._data.get(folder, {}).get(self.ENGINE_KEY, {}))
@@ -183,7 +188,13 @@ class PropertiesStore(QObject):
 
     @Slot(str, str, str)
     def setEngineOption(self, folder, key, value):
-        if key not in self.ENGINE_CHOICES or (value and value not in self.ENGINE_CHOICES[key]):
+        if key in self.ENGINE_NUMERIC:
+            low, high = self.ENGINE_NUMERIC[key]
+            try:
+                value = f"{min(high, max(low, float(value))):g}" if value else ""
+            except ValueError:
+                return
+        elif key not in self.ENGINE_CHOICES or (value and value not in self.ENGINE_CHOICES[key]):
             return
         entry = self._data.setdefault(folder, {})
         options = entry.setdefault(self.ENGINE_KEY, {})

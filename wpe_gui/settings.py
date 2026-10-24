@@ -17,6 +17,8 @@ DEFAULTS = {
     "autoMute": False,
     "disableMouse": False,
     "pauseOnFullscreen": True,
+    "powerSaving": "fullscreen",  # off | fullscreen | maximized
+    "audioGain": 1.0,
     "scaling": "default",
     "clamping": "clamp",
     "windowed": False,

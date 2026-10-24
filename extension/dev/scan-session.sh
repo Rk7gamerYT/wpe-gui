@@ -1,6 +1,6 @@
 # Runs inside the throwaway session (see scan-wallpapers.sh)
 ev() { gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval "$1" 2>&1; }
-DISP=$(ev "GLib.getenv('DISPLAY')" | grep -oE ":[0-9]+" | head -1)
+for _ in $(seq 1 30); do DISP=$(ev "GLib.getenv('DISPLAY')" | grep -oE ":[0-9]+" | head -1); [ -n "$DISP" ] && break; sleep 1; done
 XA=$(ev "GLib.getenv('XAUTHORITY')" | grep -oE "/[^\"']+" | head -1)
 OUT="$WPE_STATE/scan.tsv"; : > "$OUT"
 while read -r dir; do

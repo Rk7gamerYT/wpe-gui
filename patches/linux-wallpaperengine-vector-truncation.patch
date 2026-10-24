@@ -1,0 +1,171 @@
+diff --git a/src/WallpaperEngine/Render/Shaders/GLSLContext.cpp b/src/WallpaperEngine/Render/Shaders/GLSLContext.cpp
+index dd4f4d4..c7808c4 100644
+--- a/src/WallpaperEngine/Render/Shaders/GLSLContext.cpp
++++ b/src/WallpaperEngine/Render/Shaders/GLSLContext.cpp
+@@ -1,3 +1,8 @@
++#include <algorithm>
++#include <cctype>
++#include <map>
++#include <regex>
++#include <sstream>
+ #include "GLSLContext.h"
+ #include "WallpaperEngine/Logging/Log.h"
+ 
+@@ -115,6 +120,121 @@ TBuiltInResource BuiltInResource = { .maxLights = 32,
+ 					 .generalConstantMatrixVectorIndexing = true,
+ 				     } };
+ 
++
++namespace {
++/**
++ * Wallpaper Engine compiles shaders with an HLSL-derived compiler that silently truncates the larger vector when
++ * two vectors of different sizes meet (vec4 * vec2, vec3 = vec4). GLSL rejects both, which leaves every wallpaper
++ * using such a shader black. Rewrites the offending lines using glslang's own error messages so that parsing can
++ * be retried; returns false when nothing could be repaired.
++ */
++bool repairVectorTruncation (std::string& source, const std::string& log) {
++    static const std::regex operandsError (
++	R"(ERROR: 0:(\d+): '[^']*' :\s+wrong operand types: no operation '[^']*' exists that takes a left-hand operand of type '[^']*?(\d)-component vector of float' and a right operand of type '[^']*?(\d)-component vector of float')"
++    );
++    static const std::regex convertError (
++	R"(ERROR: 0:(\d+): '=' :\s+cannot convert from '[^']*?(\d)-component vector of float' to '[^']*?(\d)-component vector of float')"
++    );
++    static const std::regex declaration (R"(\bvec([234])\s+(\w+)\s*[;=,\[)])");
++    static const char* swizzle[] = { "", "", ".xy", ".xyz" };
++
++    std::map<std::string, int> sizes;
++    for (std::sregex_iterator it (source.begin (), source.end (), declaration), end; it != end; ++it) {
++	sizes[(*it)[2]] = std::stoi ((*it)[1]);
++    }
++
++    std::vector<std::string> lines;
++    {
++	std::istringstream in (source);
++	for (std::string line; std::getline (in, line);) {
++	    lines.push_back (line);
++	}
++    }
++
++    bool changed = false;
++
++    // vec4 * vec2: cut the identifiers of the larger size down to the smaller one
++    for (std::sregex_iterator it (log.begin (), log.end (), operandsError), end; it != end; ++it) {
++	const size_t number = std::stoul ((*it)[1]);
++	const int left = std::stoi ((*it)[2]);
++	const int right = std::stoi ((*it)[3]);
++	const int large = std::max (left, right);
++	const int small = std::min (left, right);
++	if (number == 0 || number > lines.size () || large == small || small < 2) {
++	    continue;
++	}
++	std::string& line = lines[number - 1];
++	std::string out;
++	for (size_t i = 0; i < line.size ();) {
++	    if (std::isalpha (static_cast<unsigned char> (line[i])) || line[i] == '_') {
++		size_t j = i;
++		while (j < line.size () && (std::isalnum (static_cast<unsigned char> (line[j])) || line[j] == '_')) {
++		    j++;
++		}
++		const std::string word = line.substr (i, j - i);
++		const bool member = i > 0 && line[i - 1] == '.';
++		const bool accessed = j < line.size () && (line[j] == '.' || line[j] == '(' || line[j] == '[');
++		const auto size = sizes.find (word);
++		out += word;
++		if (!member && !accessed && size != sizes.end () && size->second == large) {
++		    out += swizzle[small];
++		    changed = true;
++		}
++		i = j;
++	    } else {
++		out += line[i++];
++	    }
++	}
++	line = out;
++    }
++
++    // vec3 = vec4: keep the first components of the right-hand side
++    for (std::sregex_iterator it (log.begin (), log.end (), convertError), end; it != end; ++it) {
++	const size_t number = std::stoul ((*it)[1]);
++	const int from = std::stoi ((*it)[2]);
++	const int to = std::stoi ((*it)[3]);
++	if (number == 0 || number > lines.size () || to >= from || to < 2) {
++	    continue;
++	}
++	std::string& line = lines[number - 1];
++	const size_t equals = line.find ('=');
++	const size_t semicolon = line.rfind (';');
++	if (equals == std::string::npos || semicolon == std::string::npos || semicolon < equals
++	    || (equals + 1 < line.size () && line[equals + 1] == '=')) {
++	    continue;
++	}
++	line = line.substr (0, equals + 1) + " (" + line.substr (equals + 1, semicolon - equals - 1) + ")"
++	    + swizzle[to] + line.substr (semicolon);
++	changed = true;
++    }
++
++    if (changed) {
++	source.clear ();
++	for (const auto& line : lines) {
++	    source += line + "\n";
++	}
++    }
++
++    return changed;
++}
++
++/** Parses a shader, retrying a few times after repairing vector size mismatches. */
++bool parseRepairing (glslang::TShader& shader, std::string& source, const TBuiltInResource& resources) {
++    for (int attempt = 0; attempt < 8; attempt++) {
++	const char* text = source.c_str ();
++	shader.setStrings (&text, 1);
++	if (shader.parse (&resources, 100, false, EShMsgDefault)) {
++	    return true;
++	}
++	if (!repairVectorTruncation (source, shader.getInfoLog ())) {
++	    return false;
++	}
++	sLog.out ("Repaired implicit vector truncation in shader, retrying");
++    }
++    return false;
++}
++} // namespace
++
+ GLSLContext::GLSLContext () {
+     assert (this->sInstance == nullptr);
+ 
+@@ -134,8 +254,7 @@ GLSLContext& GLSLContext::get () {
+ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vertex, const std::string& fragment) {
+     glslang::TShader vertexShader (EShLangVertex);
+ 
+-    const char* vertexSource = vertex.c_str ();
+-    vertexShader.setStrings (&vertexSource, 1);
++    std::string vertexText = vertex;
+     vertexShader.setEntryPoint ("main");
+     vertexShader.setEnvInput (glslang::EShSourceGlsl, EShLangVertex, glslang::EShClientOpenGL, 330);
+     vertexShader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
+@@ -143,14 +262,13 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
+     vertexShader.setAutoMapLocations (true);
+     vertexShader.setAutoMapBindings (true);
+ 
+-    if (!vertexShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
++    if (!parseRepairing (vertexShader, vertexText, BuiltInResource)) {
+ 	sLog.error ("GLSL vertex unit parsing Failed: ", vertexShader.getInfoLog ());
+ 	return { "", "" };
+     }
+     glslang::TShader fragmentShader (EShLangFragment);
+ 
+-    const char* fragmentSource = fragment.c_str ();
+-    fragmentShader.setStrings (&fragmentSource, 1);
++    std::string fragmentText = fragment;
+     fragmentShader.setEntryPoint ("main");
+     fragmentShader.setEnvInput (glslang::EShSourceGlsl, EShLangFragment, glslang::EShClientOpenGL, 330);
+     fragmentShader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
+@@ -158,7 +276,7 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
+     fragmentShader.setAutoMapLocations (true);
+     fragmentShader.setAutoMapBindings (true);
+ 
+-    if (!fragmentShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
++    if (!parseRepairing (fragmentShader, fragmentText, BuiltInResource)) {
+ 	sLog.error ("GLSL fragment unit parsing Failed: ", fragmentShader.getInfoLog ());
+ 	return { "", "" };
+     }

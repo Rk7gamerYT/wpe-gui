@@ -41,6 +41,9 @@ O modo `--screen-root` do motor depende de `wlr-layer-shell`, que o GNOME não o
 ```
 
 Com ela, o wallpaper fica atrás dos apps e dos ícones da área de trabalho, cobre o monitor inteiro, não minimiza e não aparece na Visão geral.
+Os cliques passam pela janela inteira do wallpaper, incluindo sua superfície interna,
+para manter aplicativos e ícones clicáveis. Ao atualizar a extensão, execute novamente
+`./extension/install.sh` e saia e entre na sessão para carregar o código novo.
 
 ### Testar a extensão sem relogar
 

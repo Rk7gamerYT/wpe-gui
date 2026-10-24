@@ -3,7 +3,9 @@
 The engine accepts a single --window per process, so in window mode every monitor gets its own process.
 """
 
+import os
 import shutil
+import signal
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Property, QTimer, Signal, Slot
@@ -28,6 +30,7 @@ class Engine(QObject):
         self._reapply = QTimer(self, singleShot=True, interval=500)
         self._reapply.timeout.connect(self._reapply_pending)
         self._pending: set[str] = set()
+        self._paused: set[str] = set()  # target keys whose process is stopped (power saving)
         self._silent: dict[str, bool] = {}  # target key -> whether its process was started with --silent
 
     # -- state exposed to QML ------------------------------------------------------------------
@@ -49,8 +52,17 @@ class Engine(QObject):
             return wp.title if wp else Path(path).name
         names = {t: title(p) for t, p in self._assignments.items()}
         if len(set(names.values())) == 1 and len(names) > 1:
-            return next(iter(names.values()))
-        return " · ".join(names[t] if t == SPAN else f"{t}: {names[t]}" for t in sorted(names))
+            text = next(iter(names.values()))
+        else:
+            text = " · ".join(names[t] if t == SPAN else f"{t}: {names[t]}" for t in sorted(names))
+        if self._paused & set(self._assignments):
+            text += " (pausado: " + ", ".join("todos os monitores" if t == SPAN else t
+                                              for t in sorted(self._paused & set(self._assignments))) + ")"
+        return text
+
+    @Slot(result="QVariant")
+    def runningTargets(self):
+        return sorted(self._procs)
 
     @Slot(result="QVariant")
     def screenNames(self):
@@ -96,7 +108,7 @@ class Engine(QObject):
             args.append("--noautomute")
         if s.get("disableMouse"):
             args.append("--disable-mouse")
-        if not s.get("pauseOnFullscreen"):
+        if s.get("powerSaving") == "off":
             args.append("--no-fullscreen-pause")
 
         screens = self._screens_by_name()
@@ -113,12 +125,39 @@ class Engine(QObject):
             args += ["--screen-root", selected[0].name()]
 
         options = self._properties.engine_options(path)
+        if library.audio_responsive(path):
+            try:
+                gain = float(options.get("audioGain") or s.get("audioGain"))
+            except (TypeError, ValueError):
+                gain = 1.0
+            if gain != 1.0:
+                args += ["--audio-gain", f"{gain:g}"]
         args += [
             "--scaling", options.get("scaling") or s.get("scaling"),
             "--clamp", options.get("clamping") or s.get("clamping"),
             "--bg", path,
         ]
         return args + self._properties.engine_args(path)
+
+    # -- power saving --------------------------------------------------------------------------
+
+    def setPausedTargets(self, wanted: set):
+        """Stop (SIGSTOP) the processes whose monitor is covered and resume (SIGCONT) the others."""
+        wanted = {k for k in wanted if k in self._procs}
+        if wanted == self._paused:
+            return
+        for key in self._procs.keys() & (wanted | self._paused):
+            self._signal(self._procs[key], signal.SIGSTOP if key in wanted else signal.SIGCONT)
+        self._paused = wanted
+        self.activeChanged.emit()
+
+    @staticmethod
+    def _signal(proc, sig):
+        try:
+            if proc.processId():
+                os.kill(proc.processId(), sig)
+        except ProcessLookupError:
+            pass
 
     # -- audio ---------------------------------------------------------------------------------
 
@@ -198,8 +237,11 @@ class Engine(QObject):
 
     def _stop_keys(self, keys):
         procs = [(k, self._procs.pop(k)) for k in keys if k in self._procs]
-        for _k, proc in procs:
+        for k, proc in procs:
             proc.finished.disconnect()
+            if k in self._paused:
+                self._signal(proc, signal.SIGCONT)  # a stopped process would sit on the pending SIGTERM
+                self._paused.discard(k)
             proc.terminate()
         for k, proc in procs:  # terminate all first, then wait, so stopping N monitors doesn't take N x 2s
             if not proc.waitForFinished(2000):
@@ -257,6 +299,7 @@ class Engine(QObject):
         if self._procs.get(key) is proc:
             del self._procs[key]
             self._assignments.pop(key, None)
+            self._paused.discard(key)
             self.activeChanged.emit()
             self._rebalance_audio()
         if code != 0:

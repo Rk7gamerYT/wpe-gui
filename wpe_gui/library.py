@@ -1,5 +1,6 @@
 """Finds installed Wallpaper Engine wallpapers and reads their project.json."""
 
+import functools
 import json
 import re
 from dataclasses import dataclass, field
@@ -101,3 +102,30 @@ def scan(dirs: list[Path]) -> list[Wallpaper]:
             if sub.is_dir() and (wp := read_wallpaper(sub)):
                 found.append(wp)
     return found
+
+
+@functools.lru_cache(maxsize=None)
+def audio_responsive(folder: str) -> bool:
+    """Whether the wallpaper reacts to the sound playing on the computer (visualizers, pulsing scenes...).
+
+    Wallpapers declare it with `supportsaudioprocessing` in project.json, but many only use the audio spectrum in
+    their shaders, so the scene package is searched too (in chunks, the packages can be large).
+    """
+    root = Path(folder)
+    try:
+        data = json.loads((root / "project.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return False
+    if data.get("general", {}).get("supportsaudioprocessing"):
+        return True
+    needle = b"g_AudioSpectrum"
+    try:
+        with open(root / "scene.pkg", "rb") as f:
+            tail = b""
+            while chunk := f.read(8 << 20):
+                if needle in tail + chunk:
+                    return True
+                tail = chunk[-len(needle):]
+    except OSError:
+        pass
+    return False

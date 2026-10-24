@@ -5,7 +5,7 @@ DISP=$(ev "GLib.getenv('DISPLAY')" | grep -oE ":[0-9]+" | head -1)
 XA=$(ev "GLib.getenv('XAUTHORITY')" | grep -oE "/[^\"']+" | head -1)
 if [ -n "${WPE_APP:-}" ]; then
   # Drive the app's own Engine (per-monitor processes, layouts) instead of launching the engine by hand
-  ( export XAUTHORITY=$XA DISPLAY=$DISP QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wpe-test
+  ( export XAUTHORITY=$XA DISPLAY=$DISP QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=$WPE_DISPLAY
     "${WPE_PYTHON:-python3}" "$(dirname "$0")/app-test.py" > "$WPE_STATE/app.log" 2>&1 & )
 else
 # One engine window per monitor, positioned from the geometry the shell reports
@@ -33,10 +33,36 @@ for geom in $GEOMS; do
 done
 fi
 sleep ${WPE_SETTLE:-8}
-( unset DISPLAY XAUTHORITY; export WAYLAND_DISPLAY=wpe-test XDG_SESSION_TYPE=wayland
+( unset DISPLAY XAUTHORITY; export WAYLAND_DISPLAY=$WPE_DISPLAY XDG_SESSION_TYPE=wayland
   gnome-text-editor --new-window > "$WPE_STATE/editor.log" 2>&1 & )
 sleep 6
 shot "$WPE_STATE/shot-apps.png"
+# Check the compositor's actual input target, not just the visible stacking order.
+# A reactive MetaSurfaceActor can steal clicks even when its parent is non-reactive.
+INPUT=$(ev "(() => {
+  const pick = (x, y) => {
+    let a = global.stage.get_actor_at_pos(1, x, y);
+    while (a) {
+      if (a.meta_window) return a.meta_window;
+      a = a.get_parent();
+    }
+    return null;
+  };
+  const normal = global.get_window_actors().map(a => a.meta_window).find(w =>
+    w.get_title() !== 'wallpaperengine' && w.get_window_type() === 0);
+  if (!normal) return 'FAIL: no ordinary app window available';
+  const r = normal.get_frame_rect();
+  if (pick(r.x + r.width / 2, r.y + r.height / 2) !== normal)
+    return 'FAIL: ordinary app does not receive pointer input';
+  for (const m of Main.layoutManager.monitors) {
+    const w = pick(m.x + 20, m.y + 100);
+    if (w?.get_title() === 'wallpaperengine')
+      return 'FAIL: wallpaper intercepts desktop pointer input';
+  }
+  return 'PASS: app and desktop pointer input bypass the wallpaper';
+})()")
+echo "== input: $INPUT"
+[[ "$INPUT" == *'PASS: app and desktop'* ]] || exit 1
 echo "== processos do motor"
 ps -eo pid,stat,etime,pcpu,comm,args | grep -E "[l]inux-wallpaper|[c]ef|[c]hrome|[s]ubprocess" | cut -c1-180
 PID=$(ps -eo pid,comm,args | awk '$2=="linux-wallpaper" && /0x0x1920x1080|1080x0x1920x1080|0x0x1080x1920|0x0x3000x1920/ {print $1; exit}')
@@ -56,6 +82,19 @@ ev "global.get_window_actors().filter(a => a.meta_window.get_title() === 'wallpa
 echo "== app.log"; cat "$WPE_STATE/app.log" 2>/dev/null | cut -c1-300
 echo "== layer order (bottom to top)"
 ev "Main.layoutManager._backgroundGroup.get_children().map(c => c.constructor.name+'('+c.x+','+c.y+' '+c.width+'x'+c.height+')').join(' < ')"
+if [ -n "${WPE_TEST_COVERAGE:-}" ]; then
+  covered() { gdbus call --session --dest org.wpegui.Background --object-path /org/wpegui/Background --method org.wpegui.Background.GetCovered 2>&1 | cut -c1-200; }
+  win() { ev "(() => { const w = global.get_window_actors().map(a => a.meta_window).find(w => w.get_title() !== 'wallpaperengine' && w.get_window_type() === 0); $1; return 'ok'; })()" > /dev/null; sleep 1; }
+  # State of each engine started by the app (children of app-test.py): S/R = running, T = stopped by power saving
+  engstates() { local app; app=$(pgrep -f "app-test.py" | head -1); [ -z "$app" ] && return
+    for pid in $(pgrep -P "$app"); do echo "     motor $(ps -o stat= -p $pid | tr -d ' ') $(ps -o args= -p $pid | grep -oE '[0-9]+x[0-9]+x[0-9]+x[0-9]+' | head -1)"; done; }
+  echo "== coverage: nada maximizado";  covered; engstates
+  win "w.maximize()";                  echo "== coverage: app maximizado";    covered; engstates
+  win "w.unmaximize()";                echo "== coverage: desmaximizado";     covered; engstates
+  win "w.make_fullscreen()";           echo "== coverage: tela cheia";        covered; engstates
+  win "w.unmake_fullscreen()";         echo "== coverage: saiu da tela cheia"; covered; engstates
+  win "w.maximize(); w.minimize()";    echo "== coverage: maximizado mas minimizado"; covered
+fi
 echo "== minimize the wallpaper (must be restored)"
 ev "(() => { const w = global.get_window_actors().map(a => a.meta_window).find(w => w.get_title() === 'wallpaperengine'); w.minimize(); return 'minimize()'; })()"; sleep 2
 ev "(() => { const a = global.get_window_actors().find(a => a.meta_window.get_title() === 'wallpaperengine'); return 'minimized='+a.meta_window.minimized+' visible='+a.visible; })()"

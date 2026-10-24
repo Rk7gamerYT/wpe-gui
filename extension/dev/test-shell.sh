@@ -23,13 +23,15 @@ enabled-extensions=['$UUID', 'ding@rastersoft.com']
 disable-user-extensions=false
 welcome-dialog-last-shown-version='99'
 KEYS
+# unique Wayland socket per run, so overlapping runs never collide
+export WPE_DISPLAY=wpe-$$-$RANDOM
 export XDG_DATA_HOME=$WPE_STATE/data XDG_CONFIG_HOME=$WPE_STATE/config GSETTINGS_BACKEND=keyfile
 export XDG_DATA_DIRS=$WPE_STATE/data:/usr/local/share:/usr/share XDG_STATE_HOME=$WPE_STATE/state XDG_CACHE_HOME=$WPE_STATE/cache
 export WPE_VIRTUAL_MONITORS=${WPE_VIRTUAL_MONITORS:-1920x1080}
 MON_FLAGS=""; for m in $WPE_VIRTUAL_MONITORS; do MON_FLAGS="$MON_FLAGS --virtual-monitor $m"; done
 echo "state dir: $WPE_STATE | monitors: $WPE_VIRTUAL_MONITORS"
 timeout 150 dbus-run-session -- bash -c "
-  gnome-shell --headless --wayland --wayland-display=wpe-test --unsafe-mode $MON_FLAGS > '$WPE_STATE/shell.log' 2>&1 &
+  gnome-shell --headless --wayland --wayland-display=$WPE_DISPLAY --unsafe-mode $MON_FLAGS > '$WPE_STATE/shell.log' 2>&1 &
   SH=\$!; sleep 8
   bash '$HERE/session-test.sh' > '$WPE_STATE/test.log' 2>&1
   kill \$SH 2>/dev/null; wait \$SH 2>/dev/null || true"
