@@ -39,3 +39,16 @@ if [ "${WPE_TRAY_ONLY:-}" = 6 ]; then
   echo "-- agora abre pelo segundo lancamento:"; launch; sleep 4; echo -n "janela: "; app_windows
   stop_all; sleep 2
 fi
+
+if [ "${WPE_TRAY_ONLY:-}" = 7 ]; then
+  echo "== 7. o app continua no dock / Alt+Tab depois de escondido?"
+  running() { ev "imports.gi.Shell.AppSystem.get_default().get_running().map(a => a.get_id() + ' janelas=' + a.get_windows().length).join(' | ')"; }
+  # the desktop entry must exist (as it does once --install-desktop ran) so the shell can match the window to the app
+  printf '{"restoreOnStart": false, "windowed": true, "staticBackground": false}' > "$H/.config/wpe-gui/settings.json"
+  : > "$PIDS"; launch; sleep 9
+  echo -n "janela aberta -> apps em execucao: "; running
+  close_window; sleep 3
+  echo -n "janela escondida -> apps em execucao: "; running
+  echo -n "Alt+Tab (janelas): "; ev "global.display.get_tab_list(0, null).map(w => w.get_title()).join(' | ')"
+  stop_all; sleep 2
+fi
