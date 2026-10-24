@@ -29,4 +29,4 @@ O modo `--screen-root` do motor depende de `wlr-layer-shell`, que o GNOME não o
 
 ## Licença
 
-GPL-3.0-or-later (mesma licença do motor).
+MIT. Qualquer pessoa (inclusive os criadores do Wallpaper Engine) pode usar, modificar e redistribuir o código livremente. O motor linux-wallpaperengine é um programa separado, executado como processo externo, com a licença própria dele.
