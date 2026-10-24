@@ -19,6 +19,9 @@ DEFAULTS = {
     "pauseOnFullscreen": True,
     "powerSaving": "fullscreen",  # off | fullscreen | maximized
     "audioGain": 1.0,
+    "staticBackground": True,  # keep a still picture of the wallpaper as the desktop background
+    "staticSignature": "",
+    "originalBackground": {},
     "scaling": "default",
     "clamping": "clamp",
     "windowed": False,

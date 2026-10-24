@@ -16,6 +16,7 @@ from wpe_gui.models import WallpaperFilter, WallpaperModel
 from wpe_gui.powersaver import PowerSaver
 from wpe_gui.properties import PropertiesStore
 from wpe_gui.settings import Settings
+from wpe_gui.staticbackground import StaticBackground
 
 try:  # present only in builds that have the login background feature
     from wpe_gui.login_background import LoginBackground
@@ -30,6 +31,7 @@ settings = Settings(tmp / "settings.json")
 properties = PropertiesStore(tmp / "overrides.json")
 engine = Engine(settings, properties)
 powersaver = PowerSaver(settings, engine)
+static_background = StaticBackground(settings, engine)
 login_background = LoginBackground(engine) if LoginBackground else None
 model = WallpaperModel(settings)
 proxy = WallpaperFilter()
@@ -38,7 +40,8 @@ model.reload()
 
 qml = QQmlApplicationEngine()
 ctx = qml.rootContext()
-contexts = dict(settings=settings, backend=engine, properties=properties, library=model, wallpapers=proxy)
+contexts = dict(settings=settings, backend=engine, properties=properties, library=model, wallpapers=proxy,
+                staticBackground=static_background)
 if login_background:
     contexts["loginBackground"] = login_background
 for name, obj in contexts.items():

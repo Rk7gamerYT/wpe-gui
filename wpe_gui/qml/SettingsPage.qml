@@ -158,5 +158,28 @@ ScrollView {
 
         Label { text: "Restaurar wallpapers ao abrir o app" }
         Switch { checked: settings.value("restoreOnStart"); onToggled: settings.set("restoreOnStart", checked) }
+
+        Label { text: "Fundo estático ao fechar o app"; visible: staticBackground.supported }
+        Switch {
+            visible: staticBackground.supported
+            checked: settings.value("staticBackground")
+            onToggled: settings.set("staticBackground", checked)
+        }
+        Label {
+            visible: staticBackground.supported
+            Layout.columnSpan: 2
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            opacity: 0.6
+            font.pixelSize: 11
+            text: "Mantém uma imagem do wallpaper como fundo do sistema, então ao fechar o app o desktop não volta ao fundo antigo."
+        }
+        Label { text: "Fundo original do sistema"; visible: staticBackground.supported }
+        Button {
+            visible: staticBackground.supported
+            text: "Restaurar o fundo de antes"
+            onClicked: staticBackground.restoreOriginal()
+        }
+
     }
 }

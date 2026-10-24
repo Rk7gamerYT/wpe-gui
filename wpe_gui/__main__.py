@@ -10,6 +10,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from .engine import Engine
 from .properties import PropertiesStore
 from .powersaver import PowerSaver
+from .staticbackground import StaticBackground
 from .models import WallpaperFilter, WallpaperModel
 from .settings import Settings
 
@@ -32,6 +33,7 @@ def main() -> int:
     engine = Engine(settings, properties)
     properties.changed.connect(engine.propertiesChanged)
     powersaver = PowerSaver(settings, engine)  # noqa: F841 (kept alive by the local reference)
+    static_background = StaticBackground(settings, engine)
     model = WallpaperModel(settings)
     proxy = WallpaperFilter()
     proxy.setSourceModel(model)
@@ -42,6 +44,7 @@ def main() -> int:
     ctx.setContextProperty("settings", settings)
     ctx.setContextProperty("backend", engine)
     ctx.setContextProperty("properties", properties)
+    ctx.setContextProperty("staticBackground", static_background)
     ctx.setContextProperty("library", model)
     ctx.setContextProperty("wallpapers", proxy)
     qml.load(QUrl.fromLocalFile(str(Path(__file__).parent / "qml/Main.qml")))

@@ -12,6 +12,7 @@ from wpe_gui.engine import Engine
 from wpe_gui.powersaver import PowerSaver
 from wpe_gui.properties import PropertiesStore
 from wpe_gui.settings import Settings
+from wpe_gui.staticbackground import OUTPUT_DIR, StaticBackground, gsettings
 
 app = QGuiApplication(sys.argv)
 tmp = Path(tempfile.mkdtemp())
@@ -25,6 +26,8 @@ engine = Engine(settings, PropertiesStore(tmp / "overrides.json"))
 settings.set("powerSaving", os.environ.get("WPE_POWER", "maximized"))
 engine.message.connect(lambda m: print("MESSAGE:", m, flush=True))
 powersaver = PowerSaver(settings, engine)
+static = StaticBackground(settings, engine)
+static.updated.connect(lambda: print('STATIC updated:', sorted(p.name for p in OUTPUT_DIR.glob('*.png')), flush=True))
 
 first, second = os.environ["WPE_WALLPAPER"], os.environ.get("WPE_WALLPAPER2", os.environ["WPE_WALLPAPER"])
 names = engine.screenNames()
@@ -36,5 +39,12 @@ else:
     engine.applyTo(first, "")
 print("assignments:", engine._assignments, "| summary:", engine.summary, flush=True)
 print("args:", " ".join(engine.build_args(first, next(iter(engine._assignments)))[-6:]), flush=True)
+def report():
+    print("STATIC picture-uri:", gsettings("get", "org.gnome.desktop.background", "picture-uri"), flush=True)
+    print("STATIC picture-options:", gsettings("get", "org.gnome.desktop.background", "picture-options"), flush=True)
+    print("STATIC original saved:", settings.get("originalBackground"), flush=True)
+
+
+QTimer.singleShot(int(os.environ.get("WPE_REPORT_SECONDS", "45")) * 1000, report)
 QTimer.singleShot(int(os.environ.get("WPE_APP_SECONDS", "30")) * 1000, lambda: (engine.shutdown(), app.quit()))
 app.exec()
