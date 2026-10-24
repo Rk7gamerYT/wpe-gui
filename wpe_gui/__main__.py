@@ -7,6 +7,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
 from .engine import Engine
+from .properties import PropertiesStore
 from .models import WallpaperFilter, WallpaperModel
 from .settings import Settings
 
@@ -18,7 +19,9 @@ def main() -> int:
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     settings = Settings()
-    engine = Engine(settings)
+    properties = PropertiesStore()
+    engine = Engine(settings, properties)
+    properties.changed.connect(engine.propertiesChanged)
     model = WallpaperModel(settings)
     proxy = WallpaperFilter()
     proxy.setSourceModel(model)
@@ -28,6 +31,7 @@ def main() -> int:
     ctx = qml.rootContext()
     ctx.setContextProperty("settings", settings)
     ctx.setContextProperty("backend", engine)
+    ctx.setContextProperty("properties", properties)
     ctx.setContextProperty("library", model)
     ctx.setContextProperty("wallpapers", proxy)
     qml.load(QUrl.fromLocalFile(str(Path(__file__).parent / "qml/Main.qml")))

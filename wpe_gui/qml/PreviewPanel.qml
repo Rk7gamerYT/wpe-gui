@@ -30,23 +30,41 @@ Rectangle {
             opacity: 0.6
             font.pixelSize: 11
         }
-        Label {
-            Layout.fillWidth: true
-            text: win.selected ? win.selected.description : ""
-            wrapMode: Text.Wrap
-            opacity: 0.8
-            elide: Text.ElideRight
-            maximumLineCount: 6
-        }
-        Label {
-            Layout.fillWidth: true
-            text: win.selected && win.selected.tags ? "Tags: " + win.selected.tags : ""
-            wrapMode: Text.Wrap
-            opacity: 0.6
-            font.pixelSize: 11
-        }
 
-        Item { Layout.fillHeight: true }
+        // Description, tags and the wallpaper's own properties scroll together
+        ScrollView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            contentWidth: availableWidth
+            clip: true
+
+            ColumnLayout {
+                width: parent.width
+                spacing: 12
+
+                Label {
+                    Layout.fillWidth: true
+                    text: win.selected ? win.selected.description : ""
+                    visible: text !== ""
+                    wrapMode: Text.Wrap
+                    opacity: 0.8
+                    maximumLineCount: 6
+                    elide: Text.ElideRight
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: win.selected && win.selected.tags ? "Tags: " + win.selected.tags : ""
+                    visible: text !== ""
+                    wrapMode: Text.Wrap
+                    opacity: 0.6
+                    font.pixelSize: 11
+                }
+                PropertiesList {
+                    Layout.fillWidth: true
+                    folder: win.selected ? win.selected.path : ""
+                }
+            }
+        }
 
         Button {
             Layout.fillWidth: true

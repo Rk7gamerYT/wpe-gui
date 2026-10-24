@@ -2,7 +2,8 @@
 
 import shutil
 
-from PySide6.QtCore import QObject, QProcess, Property, Signal, Slot
+from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Property, QTimer, Signal, Slot
+from PySide6.QtGui import QGuiApplication
 
 from . import library
 
@@ -12,9 +13,12 @@ class Engine(QObject):
     currentChanged = Signal()
     message = Signal(str)
 
-    def __init__(self, settings, parent=None):
+    def __init__(self, settings, properties, parent=None):
         super().__init__(parent)
         self._settings = settings
+        self._properties = properties
+        self._reapply = QTimer(self, singleShot=True, interval=500)
+        self._reapply.timeout.connect(lambda: self.apply(self._current))
         self._proc: QProcess | None = None
         self._current = ""
 
@@ -25,6 +29,19 @@ class Engine(QObject):
     @Property(str, notify=currentChanged)
     def current(self):
         return self._current
+
+    @Slot(result="QVariant")
+    def screenNames(self):
+        return [s.name() for s in QGuiApplication.screens()]
+
+    def _screen(self, name: str):
+        screens = QGuiApplication.screens()
+        return next((s for s in screens if s.name() == name), QGuiApplication.primaryScreen())
+
+    def window_geometry(self) -> str:
+        """X11 geometry (XxYxWxH) covering the chosen monitor, in the layout xrandr reports."""
+        g = self._screen(self._settings.get("screen")).geometry()
+        return f"{g.x()}x{g.y()}x{g.width()}x{g.height()}"
 
     def binary(self) -> str | None:
         custom = self._settings.get("enginePath")
@@ -48,11 +65,11 @@ class Engine(QObject):
             args.append("--no-fullscreen-pause")
         # --scaling/--clamp/--bg apply to the preceding --window/--screen-root
         if s.get("windowed"):
-            args += ["--window", s.get("windowGeometry")]
+            args += ["--window", self.window_geometry()]
         else:
-            args += ["--screen-root", screen or s.get("screen")]
+            args += ["--screen-root", screen or self._screen(s.get("screen")).name()]
         args += ["--scaling", s.get("scaling"), "--clamp", s.get("clamping"), "--bg", path]
-        return args
+        return args + self._properties.engine_args(path)
 
     @Slot(str)
     def apply(self, path: str):
@@ -62,6 +79,13 @@ class Engine(QObject):
             return
         self.stop()
         self._proc = QProcess(self)
+        if self._settings.get("windowed"):
+            # GLEW can't initialise on native Wayland; run the window through XWayland
+            env = QProcessEnvironment.systemEnvironment()
+            env.remove("WAYLAND_DISPLAY")
+            env.insert("XDG_SESSION_TYPE", "x11")
+            self._proc.setProcessEnvironment(env)
+        self._proc.setProcessChannelMode(QProcess.MergedChannels)
         self._proc.finished.connect(self._on_finished)
         self._proc.errorOccurred.connect(lambda _e: self.message.emit("Falha ao iniciar o motor."))
         self._proc.start(exe, self.build_args(path))
@@ -69,6 +93,12 @@ class Engine(QObject):
         self.currentChanged.emit()
         self.runningChanged.emit()
         self._settings.set("lastWallpaper", path)
+
+    @Slot(str)
+    def propertiesChanged(self, path: str):
+        """Restart the running wallpaper so edited properties take effect (debounced while sliding)."""
+        if self.running and path == self._current:
+            self._reapply.start()
 
     @Slot()
     def stop(self):
@@ -81,7 +111,9 @@ class Engine(QObject):
             self.runningChanged.emit()
 
     def _on_finished(self, code, _status):
+        out = bytes(self._proc.readAll()).decode(errors="replace").strip().splitlines()
         self._proc = None
         self.runningChanged.emit()
         if code != 0:
-            self.message.emit(f"O motor encerrou com código {code}.")
+            tail = out[-1] if out else ""
+            self.message.emit(f"O motor encerrou com código {code}. {tail}")

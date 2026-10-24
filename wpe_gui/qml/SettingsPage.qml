@@ -113,11 +113,11 @@ ScrollView {
         Label { text: "Modo janela (para GNOME/Wayland sem layer-shell)" }
         Switch { checked: settings.value("windowed"); onToggled: settings.set("windowed", checked) }
 
-        Label { text: "Monitor (modo root)" }
-        TextField {
-            Layout.fillWidth: true
-            text: settings.value("screen")
-            onEditingFinished: settings.set("screen", text)
+        Label { text: "Monitor" }
+        ComboBox {
+            model: ["(principal)"].concat(backend.screenNames())
+            currentIndex: Math.max(0, model.indexOf(settings.value("screen")))
+            onActivated: settings.set("screen", currentIndex === 0 ? "" : currentText)
         }
     }
 }

@@ -20,8 +20,7 @@ DEFAULTS = {
     "scaling": "default",
     "clamping": "clamp",
     "windowed": False,
-    "windowGeometry": "0x0x1280x720",
-    "screen": "eDP-1",
+    "screen": "",
     "lastWallpaper": "",
 }
 
