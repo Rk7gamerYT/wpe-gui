@@ -13,9 +13,11 @@ Versão inicial (0.1). Já faz:
 - Aplica/para o wallpaper (duplo clique ou botão), com **um wallpaper por monitor**, o mesmo **duplicado** em todos ou **esticado** entre eles
 - Ajustes por wallpaper: escala, bordas e as propriedades do próprio wallpaper (sliders, cores, listas...)
 - Restaura os wallpapers ao abrir o app
+- **Modo economia:** pausa o wallpaper só no monitor que tiver um app em tela cheia ou maximizado (no GNOME, pela extensão)
+- **Intensidade do áudio:** global e por wallpaper, para os que reagem ao som
 - Configurações: FPS, volume, mudo, escala, pausa em tela cheia, modo janela
 
-Planejado: playlists, pausar/retomar, bandeja do sistema, iniciar com a sessão, Workshop.
+Planejado: playlists, bandeja do sistema, iniciar com a sessão, Workshop.
 
 ## Executar
 
@@ -28,6 +30,19 @@ Na primeira vez o script cria o ambiente Python (`.venv`) e instala a dependênc
 ```bash
 ln -s "$PWD/wpe-gui.sh" ~/.local/bin/wpe-gui
 ```
+
+## Motor com correções
+
+Duas funções dependem de um patch no `linux-wallpaperengine`, em `patches/`:
+
+- **Reparo de vetores nos shaders:** o compilador do Windows aceita `vec4 * vec2` (corta o vetor maior) e o GLSL não. Sem o patch, wallpapers que fazem isso ficam pretos.
+- **`--audio-gain`:** multiplica o espectro de áudio que os wallpapers recebem; é o que a "Intensidade do áudio" usa.
+
+```bash
+cd linux-wallpaperengine && git apply /caminho/para/wpe-gui/patches/linux-wallpaperengine-vector-truncation.patch
+```
+
+Com o motor sem o patch, o app funciona, mas esses dois recursos não têm efeito.
 
 ## GNOME (Wayland)
 
