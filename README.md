@@ -4,6 +4,16 @@ Interface gráfica (Qt6/QML) para o [linux-wallpaperengine](https://github.com/A
 
 > Este projeto **não** inclui o motor nem os wallpapers. Você precisa do `linux-wallpaperengine` instalado e de uma cópia do Wallpaper Engine na Steam.
 
+## Instalação
+
+```bash
+git clone https://github.com/Rk7gamerYT/wpe-gui.git && cd wpe-gui
+./install.sh --dry-run   # mostra o que seria feito
+./install.sh
+```
+
+O script cuida de Ubuntu/Debian, Fedora e Arch (e derivadas). Guia completo, passo a passo por distro, Steam, GNOME e problemas comuns: **[docs/INSTALL.md](docs/INSTALL.md)**.
+
 ## Status
 
 Versão inicial (0.1). Já faz:
@@ -37,16 +47,12 @@ ln -s "$PWD/wpe-gui.sh" ~/.local/bin/wpe-gui
 
 ## Motor com correções
 
-Duas funções dependem de um patch no `linux-wallpaperengine`, em `patches/`:
+Duas funções dependem de patches no `linux-wallpaperengine`, em `patches/` (feitos sobre uma versão fixa do motor; o `install.sh` e o [guia de instalação](docs/INSTALL.md) já cuidam disso):
 
-- **Reparo de vetores nos shaders:** o compilador do Windows aceita `vec4 * vec2` (corta o vetor maior) e o GLSL não. Sem o patch, wallpapers que fazem isso ficam pretos.
-- **`--audio-gain`:** multiplica o espectro de áudio que os wallpapers recebem; é o que a "Intensidade do áudio" usa.
+- **`0001` — reparo de vetores nos shaders:** o compilador do Windows aceita `vec4 * vec2` (corta o vetor maior) e o GLSL não. Sem o patch, wallpapers que fazem isso ficam pretos.
+- **`0002` — `--audio-gain`:** multiplica o espectro de áudio que os wallpapers recebem; é o que a "Intensidade do áudio" usa.
 
-```bash
-cd linux-wallpaperengine && git apply /caminho/para/wpe-gui/patches/linux-wallpaperengine-vector-truncation.patch
-```
-
-Com o motor sem o patch, o app funciona, mas esses dois recursos não têm efeito.
+Com o motor sem os patches, o app funciona, mas esses dois recursos não têm efeito.
 
 ## GNOME (Wayland)
 

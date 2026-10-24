@@ -1,0 +1,57 @@
+diff --git a/src/WallpaperEngine/Application/ApplicationContext.cpp b/src/WallpaperEngine/Application/ApplicationContext.cpp
+index 510ec95..3f80c63 100644
+--- a/src/WallpaperEngine/Application/ApplicationContext.cpp
++++ b/src/WallpaperEngine/Application/ApplicationContext.cpp
+@@ -1,6 +1,7 @@
+ #include "ApplicationContext.h"
+ 
+ #include "Steam/FileSystem/FileSystem.h"
++#include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
+ #include "WallpaperEngine/Data/JSON.h"
+ #include "WallpaperEngine/Logging/Log.h"
+ 
+@@ -532,6 +533,17 @@ void ApplicationContext::loadSettingsFromArgv () {
+ 	.flag ()
+ 	.action ([this] (const std::string& value) -> void { this->settings.audio.automute = false; });
+ 
++    audioGroup.add_argument ("--audio-gain")
++	.help ("Multiplier for the audio spectrum wallpapers react to, 1.0 leaves it unchanged (0 stops the reaction)")
++	.default_value (1.0f)
++	.scan<'g', float> ()
++	.action ([] (const std::string& value) -> void {
++	    try {
++		Audio::Drivers::Recorders::PlaybackRecorder::gain = std::max (0.0f, std::stof (value));
++	    } catch (const std::exception&) {
++	    }
++	});
++
+     audioGroup.add_argument ("--no-audio-processing")
+ 	.help ("Disables audio processing for backgrounds")
+ 	.flag ()
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h b/src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h
+index d46b83e..e00f138 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h
+@@ -7,6 +7,9 @@ public:
+ 
+     virtual void update ();
+ 
++    /** Multiplier applied to the audio spectrum wallpapers react to (--audio-gain), 1.0 leaves it unchanged */
++    static inline float gain = 1.0f;
++
+     float audio16[16] = { 0 };
+     float audio32[32] = { 0 };
+     float audio64[64] = { 0 };
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+index 5831d4a..4a24803 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+@@ -251,7 +251,7 @@ void PulseAudioPlaybackRecorder::update () {
+ 	f1 = 0.0f;
+ 
+ 	if (f2 > 0.0f) {
+-	    f1 = 0.35f * log10 (f2);
++	    f1 = 0.35f * log10 (f2) * PlaybackRecorder::gain;
+ 	}
+ 
+ 	this->m_FFTdestination64[band]
