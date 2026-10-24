@@ -96,14 +96,14 @@ class Engine(QObject):
 
     def build_args(self, path: str, target: str, audible: bool = True) -> list[str]:
         s = self._settings
-        args = ["--fps", str(s.get("fps"))]
+        args = ["--fps", str(int(float(s.get("fps"))))]
         assets = s.get("assetsDir") or (str(a) if (a := library.default_assets_dir()) else "")
         if assets:
             args += ["--assets-dir", assets]
         if s.get("silent") or not audible:
             args.append("--silent")
         else:
-            args += ["--volume", str(s.get("volume"))]
+            args += ["--volume", str(int(float(s.get("volume"))))]  # sliders save floats; the engine only takes integers
         if not s.get("autoMute"):
             args.append("--noautomute")
         if s.get("disableMouse"):
