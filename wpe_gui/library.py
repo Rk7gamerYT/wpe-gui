@@ -42,6 +42,13 @@ def steam_library_roots() -> list[Path]:
             p = Path(m.group(1).replace("\\\\", "\\"))
             if p.is_dir():
                 roots.append(p)
+    # Libraries on secondary drives that this Steam install doesn't know about
+    uid = Path.home().name
+    for pattern in ("/mnt/*", "/media/*", f"/media/{uid}/*", f"/run/media/{uid}/*"):
+        for mount in Path("/").glob(pattern.lstrip("/")):
+            for cand in (mount, *[c for c in mount.glob("*Steam*") if c.is_dir()]):
+                if (cand / "steamapps").is_dir():
+                    roots.append(cand)
     unique = []
     for r in roots:
         if r.resolve() not in [u.resolve() for u in unique]:
