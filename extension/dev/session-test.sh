@@ -11,6 +11,8 @@ else
 # One engine window per monitor, positioned from the geometry the shell reports
 MONS=$(ev "JSON.stringify(Main.layoutManager.monitors.map(m => [m.x, m.y, m.width, m.height]))" | grep -oE "\[\[.*\]\]" | sed 's/\\//g')
 echo "== monitors: $MONS"
+# Extra engine arguments, shell-quoted in WPE_ENGINE_ARGS (values may contain spaces)
+eval "EXTRA=(${WPE_ENGINE_ARGS:-})"
 # The engine accepts a single --window per process, so start one process per monitor
 i=0
 # WPE_LAYOUT=span: a single window covering every monitor
@@ -25,16 +27,21 @@ print(' '.join('%dx%dx%dx%d' % tuple(m) for m in mons))" "$MONS" "${WPE_LAYOUT:-
 echo "== geometries: $GEOMS"
 for geom in $GEOMS; do
   ( export XAUTHORITY=$XA DISPLAY=$DISP XDG_SESSION_TYPE=x11; unset WAYLAND_DISPLAY
-    nice -n 10 timeout 45 linux-wallpaperengine ${WPE_SILENT---silent} --fps 15 --assets-dir "$WPE_ASSETS" \
-      --window "$geom" --bg "$WPE_WALLPAPER" ${WPE_ENGINE_ARGS:-} > "$WPE_STATE/engine-$i.log" 2>&1 & )
+    nice -n 10 timeout ${WPE_ENGINE_SECONDS:-45} linux-wallpaperengine ${WPE_SILENT---silent} --fps 15 --assets-dir "$WPE_ASSETS" \
+      --window "$geom" --bg "$WPE_WALLPAPER" "${EXTRA[@]}" > "$WPE_STATE/engine-$i.log" 2>&1 & )
   i=$((i+1))
 done
 fi
-sleep 8
+sleep ${WPE_SETTLE:-8}
 ( unset DISPLAY XAUTHORITY; export WAYLAND_DISPLAY=wpe-test XDG_SESSION_TYPE=wayland
   gnome-text-editor --new-window > "$WPE_STATE/editor.log" 2>&1 & )
 sleep 6
 shot "$WPE_STATE/shot-apps.png"
+echo "== processos do motor"
+ps -eo pid,stat,etime,pcpu,comm,args | grep -E "[l]inux-wallpaper|[c]ef|[c]hrome|[s]ubprocess" | cut -c1-180
+PID=$(ps -eo pid,comm,args | awk '$2=="linux-wallpaper" && /0x0x1920x1080|1080x0x1920x1080|0x0x1080x1920|0x0x3000x1920/ {print $1; exit}')
+echo "== pilha do motor (pid ${PID:-?})"
+[ -n "$PID" ] && gdb -p "$PID" -batch -ex "thread apply all bt 14" 2>&1 | grep -E "^#|^Thread" | cut -c1-200 | head -40
 echo "== audio streams (PipeWire)"
 pw-dump 2>/dev/null | python3 -c "
 import json,sys

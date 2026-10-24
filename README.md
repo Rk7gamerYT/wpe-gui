@@ -20,9 +20,13 @@ Planejado: playlists, pausar/retomar, bandeja do sistema, iniciar com a sessão,
 ## Executar
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -e .
-.venv/bin/wpe-gui
+./wpe-gui.sh
+```
+
+Na primeira vez o script cria o ambiente Python (`.venv`) e instala a dependência sozinho. Para abrir de qualquer pasta, crie um link no seu `PATH`:
+
+```bash
+ln -s "$PWD/wpe-gui.sh" ~/.local/bin/wpe-gui
 ```
 
 ## GNOME (Wayland)
