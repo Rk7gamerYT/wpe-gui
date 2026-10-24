@@ -113,11 +113,15 @@ ScrollView {
         Label { text: "Modo janela (para GNOME/Wayland sem layer-shell)" }
         Switch { checked: settings.value("windowed"); onToggled: settings.set("windowed", checked) }
 
-        Label { text: "Monitor" }
+        Label { text: "Vários monitores" }
         ComboBox {
-            model: ["(principal)"].concat(backend.screenNames())
-            currentIndex: Math.max(0, model.indexOf(settings.value("screen")))
-            onActivated: settings.set("screen", currentIndex === 0 ? "" : currentText)
+            readonly property var values: ["independent", "duplicate", "span"]
+            model: ["Um wallpaper por monitor", "Duplicar em todos", "Esticar entre os monitores"]
+            currentIndex: Math.max(0, values.indexOf(settings.value("layout")))
+            onActivated: settings.set("layout", values[currentIndex])
         }
+
+        Label { text: "Restaurar wallpapers ao abrir o app" }
+        Switch { checked: settings.value("restoreOnStart"); onToggled: settings.set("restoreOnStart", checked) }
     }
 }

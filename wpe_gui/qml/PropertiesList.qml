@@ -18,6 +18,33 @@ ColumnLayout {
     }
     onFolderChanged: reload()
 
+    // Per-wallpaper display adjustments; "Padrão" falls back to the global setting
+    Label { text: "Ajustes do wallpaper"; font.bold: true; visible: root.folder !== "" }
+    GridLayout {
+        Layout.fillWidth: true
+        visible: root.folder !== ""
+        columns: 2
+        columnSpacing: 10
+        rowSpacing: 6
+        Label { text: "Escala" }
+        ComboBox {
+            id: scalingBox
+            Layout.fillWidth: true
+            readonly property var values: ["", "stretch", "fit", "fill"]
+            model: ["Padrão", "Esticar", "Ajustar", "Preencher"]
+            currentIndex: Math.max(0, values.indexOf(properties.engineOption(root.folder, "scaling")))
+            onActivated: properties.setEngineOption(root.folder, "scaling", values[currentIndex])
+        }
+        Label { text: "Bordas" }
+        ComboBox {
+            Layout.fillWidth: true
+            readonly property var values: ["", "border", "repeat"]
+            model: ["Padrão", "Cor da borda", "Repetir"]
+            currentIndex: Math.max(0, values.indexOf(properties.engineOption(root.folder, "clamping")))
+            onActivated: properties.setEngineOption(root.folder, "clamping", values[currentIndex])
+        }
+    }
+
     RowLayout {
         Layout.fillWidth: true
         visible: root.items.length > 0

@@ -54,7 +54,7 @@ Item {
                     font.pixelSize: 12
                 }
                 Rectangle {
-                    visible: backend.current === cell.path
+                    visible: backend.active.indexOf(cell.path) >= 0
                     anchors.top: parent.top
                     anchors.right: parent.right
                     anchors.margins: 6

@@ -12,6 +12,11 @@ ApplicationWindow {
 
     property var selected: null
     property string page: "installed"
+    property string layout: settings.value("layout")
+    Connections {
+        target: settings
+        function onChanged() { win.layout = settings.value("layout") }
+    }
 
     palette.window: "#1b1d23"
     palette.windowText: "#e6e8ee"
@@ -58,7 +63,7 @@ ApplicationWindow {
             x: 12
             font.pixelSize: 12
             opacity: 0.7
-            text: backend.running ? "Em execução: " + backend.current : "Nenhum wallpaper ativo"
+            text: backend.running ? "Em execução: " + backend.summary : "Nenhum wallpaper ativo"
         }
         Button {
             anchors.right: parent.right

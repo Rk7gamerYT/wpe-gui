@@ -66,11 +66,37 @@ Rectangle {
             }
         }
 
-        Button {
+        RowLayout {
             Layout.fillWidth: true
-            text: "Aplicar wallpaper"
-            highlighted: true
-            onClicked: backend.apply(win.selected.path)
+            spacing: 0
+
+            Button {
+                Layout.fillWidth: true
+                text: win.layout === "independent" && backend.screenNames().length > 1
+                      ? "Aplicar em todos os monitores" : "Aplicar wallpaper"
+                highlighted: true
+                onClicked: backend.applyTo(win.selected.path, "")
+            }
+            // Only the "one wallpaper per monitor" layout lets you pick a monitor
+            Button {
+                visible: win.layout === "independent" && backend.screenNames().length > 1
+                text: "▾"
+                highlighted: true
+                onClicked: monitorMenu.popup()
+                Menu {
+                    id: monitorMenu
+                    Repeater {
+                        model: backend.screenNames()
+                        MenuItem {
+                            required property string modelData
+                            text: "Aplicar só em " + modelData
+                            onTriggered: backend.applyTo(win.selected.path, modelData)
+                        }
+                    }
+                    MenuSeparator {}
+                    MenuItem { text: "Parar este wallpaper"; onTriggered: backend.stopPath(win.selected.path) }
+                }
+            }
         }
     }
 

@@ -10,10 +10,12 @@ Versão inicial (0.1). Já faz:
 
 - Lista wallpapers instalados pela Steam (`steamapps/workshop/content/431960`) e pastas extras
 - Busca e filtro por tipo
-- Aplica/para o wallpaper (duplo clique ou botão)
+- Aplica/para o wallpaper (duplo clique ou botão), com **um wallpaper por monitor**, o mesmo **duplicado** em todos ou **esticado** entre eles
+- Ajustes por wallpaper: escala, bordas e as propriedades do próprio wallpaper (sliders, cores, listas...)
+- Restaura os wallpapers ao abrir o app
 - Configurações: FPS, volume, mudo, escala, pausa em tela cheia, modo janela
 
-Planejado: propriedades por wallpaper (`--set-property`), playlists, multi-monitor, bandeja do sistema, iniciar com a sessão.
+Planejado: playlists, pausar/retomar, bandeja do sistema, iniciar com a sessão, Workshop.
 
 ## Executar
 

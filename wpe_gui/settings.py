@@ -20,8 +20,9 @@ DEFAULTS = {
     "scaling": "default",
     "clamping": "clamp",
     "windowed": False,
-    "screen": "",
-    "lastWallpaper": "",
+    "layout": "independent",
+    "assignments": {},
+    "restoreOnStart": True,
 }
 
 

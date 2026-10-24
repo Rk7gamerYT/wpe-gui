@@ -168,6 +168,36 @@ class PropertiesStore(QObject):
             self._save()
         self.changed.emit(folder)
 
+    # -- per-wallpaper engine options (scaling, clamping), stored beside the property overrides ------
+
+    ENGINE_KEY = "_engine"
+    ENGINE_CHOICES = {"scaling": ("default", "stretch", "fit", "fill"), "clamping": ("clamp", "border", "repeat")}
+
+    def engine_options(self, folder: str) -> dict:
+        return dict(self._data.get(folder, {}).get(self.ENGINE_KEY, {}))
+
+    @Slot(str, str, result=str)
+    def engineOption(self, folder, key):
+        """'' means 'use the global setting'."""
+        return self.engine_options(folder).get(key, "")
+
+    @Slot(str, str, str)
+    def setEngineOption(self, folder, key, value):
+        if key not in self.ENGINE_CHOICES or (value and value not in self.ENGINE_CHOICES[key]):
+            return
+        entry = self._data.setdefault(folder, {})
+        options = entry.setdefault(self.ENGINE_KEY, {})
+        if value:
+            options[key] = value
+        else:
+            options.pop(key, None)
+        if not options:
+            entry.pop(self.ENGINE_KEY, None)
+        if not entry:
+            self._data.pop(folder, None)
+        self._save()
+        self.changed.emit(folder)
+
     def engine_args(self, folder: str) -> list[str]:
         """--set-property arguments for the overridden values only."""
         defs = self._definitions(folder)

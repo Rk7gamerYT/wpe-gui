@@ -37,8 +37,10 @@ export default class WpeBackground extends Extension {
         // pushes it under the shell's own background actor. Raise it again after each restack.
         this._restackId = global.display.connect('restacked', () => this._raiseAllLater());
         this._monitorsId = Main.layoutManager.connect('monitors-changed', () => {
-            for (const actor of this._pinned.keys())
+            for (const [actor, info] of this._pinned) {
+                info.target = this._targetFor(actor.meta_window);
                 this._place(actor);
+            }
         });
         this._mapId = global.window_manager.connect('map', (_wm, actor) => this._maybePin(actor));
         global.get_window_actors().forEach(a => this._maybePin(a));
@@ -75,22 +77,31 @@ export default class WpeBackground extends Extension {
         });
     }
 
-    // The app opens each window with exactly its monitor's size, but mutter moves new windows around
-    // (work area, other monitors), so win.get_monitor() is unreliable. Match by size, then by distance.
-    _monitorIndexFor(win) {
+    // Where a wallpaper window belongs: the app opens each window with exactly its monitor's size (or the
+    // union of all monitors when spanning), but mutter moves new windows around (work area, other
+    // monitors), so win.get_monitor() is unreliable. Match by size, then by distance.
+    _targetFor(win) {
         const r = win.get_frame_rect();
-        let best = win.get_monitor(), bestScore = Infinity;
+        const monitors = Main.layoutManager.monitors;
+        const candidates = monitors.map(m => ({x: m.x, y: m.y, width: m.width, height: m.height}));
+        if (monitors.length > 1) {
+            const x1 = Math.min(...monitors.map(m => m.x)), y1 = Math.min(...monitors.map(m => m.y));
+            const x2 = Math.max(...monitors.map(m => m.x + m.width)), y2 = Math.max(...monitors.map(m => m.y + m.height));
+            candidates.push({x: x1, y: y1, width: x2 - x1, height: y2 - y1}); // all monitors together
+        }
+        const fallback = monitors[win.get_monitor()] ?? monitors[0];
         if (r.width <= 1 || r.height <= 1)
-            return best;
-        Main.layoutManager.monitors.forEach((m, i) => {
-            const score = (Math.abs(m.width - r.width) + Math.abs(m.height - r.height)) * 1000 +
-                Math.abs(m.x - r.x) + Math.abs(m.y - r.y);
+            return {x: fallback.x, y: fallback.y};
+        let best = candidates[0], bestScore = Infinity;
+        for (const c of candidates) {
+            const score = (Math.abs(c.width - r.width) + Math.abs(c.height - r.height)) * 1000 +
+                Math.abs(c.x - r.x) + Math.abs(c.y - r.y);
             if (score < bestScore) {
-                best = i;
+                best = c;
                 bestScore = score;
             }
-        });
-        return best;
+        }
+        return {x: best.x, y: best.y};
     }
 
     _toBackground(actor) {
@@ -107,17 +118,15 @@ export default class WpeBackground extends Extension {
     }
 
     // Mutter keeps normal windows out of the top bar's strut, which pushes the wallpaper 32px down.
-    // The actor lives in the background group, so we can simply pin it to the monitor's corner.
+    // The actor lives in the background group, so we can simply pin it to the target's corner.
     _place(actor) {
         const info = this._pinned.get(actor);
         if (!info)
             return;
-        const monitor = Main.layoutManager.monitors[info.monitor];
-        if (!monitor)
-            return;
-        if (actor.x !== monitor.x || actor.y !== monitor.y) {
+        const {x, y} = info.target;
+        if (actor.x !== x || actor.y !== y) {
             info.placing = true;
-            actor.set_position(monitor.x, monitor.y);
+            actor.set_position(x, y);
             info.placing = false;
         }
     }
@@ -141,9 +150,8 @@ export default class WpeBackground extends Extension {
             return;
         }
 
-        const index = this._monitorIndexFor(win);
-        const monitor = Main.layoutManager.monitors[index];
-        console.log(`[wpe-background] pinning "${win.get_title()}" on monitor ${index}`);
+        const target = this._targetFor(win);
+        console.log(`[wpe-background] pinning "${win.get_title()}" at ${target.x},${target.y}`);
         win.stick();
         this._toBackground(actor);
 
@@ -152,10 +160,10 @@ export default class WpeBackground extends Extension {
             const info = this._pinned?.get(actor);
             if (!info || info.placing)
                 return;
-            const idx = this._monitorIndexFor(win);
-            if (idx !== info.monitor) {
-                console.log(`[wpe-background] window moved to monitor ${idx}`);
-                info.monitor = idx;
+            const t = this._targetFor(win);
+            if (t.x !== info.target.x || t.y !== info.target.y) {
+                console.log(`[wpe-background] window target is now ${t.x},${t.y}`);
+                info.target = t;
             }
             this._place(actor);
         };
@@ -177,7 +185,7 @@ export default class WpeBackground extends Extension {
             }),
             actor.connect('destroy', () => this._pinned?.delete(actor)),
         ];
-        this._pinned.set(actor, {win: winIds, actor: actorIds, monitor: index, placing: false});
+        this._pinned.set(actor, {win: winIds, actor: actorIds, target, placing: false});
         this._place(actor);
         actorIds.push(actor.connect('notify::position', () => {
             if (!this._pinned?.get(actor)?.placing)

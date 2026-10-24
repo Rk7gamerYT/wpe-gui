@@ -37,7 +37,9 @@ def main() -> int:
     qml.load(QUrl.fromLocalFile(str(Path(__file__).parent / "qml/Main.qml")))
     if not qml.rootObjects():
         return 1
-    app.aboutToQuit.connect(engine.stop)
+    app.aboutToQuit.connect(engine.shutdown)
+    if settings.get("restoreOnStart"):
+        engine.restore()
     return app.exec()
 
 
