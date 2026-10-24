@@ -1,0 +1,7 @@
+{
+  "uuid": "wpe-background@wpe-gui",
+  "name": "WPE Background",
+  "description": "Pins linux-wallpaperengine windows to the desktop background layer (GNOME has no wlr-layer-shell).",
+  "shell-version": ["48", "49", "50"],
+  "version": 1
+}

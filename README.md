@@ -23,9 +23,27 @@ python3 -m venv .venv
 .venv/bin/wpe-gui
 ```
 
-## Observação sobre GNOME/Wayland
+## GNOME (Wayland)
 
-O modo `--screen-root` do motor depende de `wlr-layer-shell`, que o GNOME não oferece. No GNOME use o **modo janela** nas configurações.
+O modo `--screen-root` do motor depende de `wlr-layer-shell`, que o GNOME não oferece. Por isso, no GNOME:
+
+1. Ligue o **modo janela** nas configurações (o app roda o motor pelo XWayland, porque o GLEW não inicia no Wayland nativo).
+2. Instale a extensão `extension/wpe-background@wpe-gui`, que move essa janela para a camada de fundo do GNOME:
+
+```bash
+./extension/install.sh   # depois, saia da sessão e entre de novo
+```
+
+Com ela, o wallpaper fica atrás dos apps e dos ícones da área de trabalho, cobre o monitor inteiro, não minimiza e não aparece na Visão geral.
+
+### Testar a extensão sem relogar
+
+`extension/dev/test-shell.sh` sobe um GNOME Shell sem tela, isolado da sua sessão, com a extensão, a DING e um app comum, e salva prints e o estado das camadas:
+
+```bash
+WPE_WALLPAPER=/caminho/workshop/content/431960/<id> WPE_ASSETS=/caminho/wallpaper_engine/assets \
+  extension/dev/test-shell.sh
+```
 
 ## Licença
 

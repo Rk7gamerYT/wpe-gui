@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Runs the extension inside a throwaway headless GNOME Shell, so it can be tested without logging out.
+# Settings and D-Bus are isolated: nothing here touches your real session.
+#
+#   WPE_WALLPAPER=/path/to/workshop/content/431960/<id> \
+#   WPE_ASSETS=/path/to/wallpaper_engine/assets ./test-shell.sh
+#
+# Output: <state dir>/test.log (scene dump), shot-apps.png and shot-overview.png (screenshots), shell.log
+set -euo pipefail
+: "${WPE_WALLPAPER:?set WPE_WALLPAPER to a wallpaper folder}" "${WPE_ASSETS:?set WPE_ASSETS to the Wallpaper Engine assets folder}"
+HERE=$(cd "$(dirname "$0")" && pwd)
+export WPE_STATE=${WPE_STATE:-$(mktemp -d)}
+UUID=wpe-background@wpe-gui
+mkdir -p "$WPE_STATE"/{data/gnome-shell/extensions,config/glib-2.0/settings,state,cache,Desktop}
+ln -sfn "$HERE/../$UUID" "$WPE_STATE/data/gnome-shell/extensions/$UUID"
+touch "$WPE_STATE/Desktop/Documento.txt"; mkdir -p "$WPE_STATE/Desktop/Projetos"
+printf 'XDG_DESKTOP_DIR="%s/Desktop"\n' "$WPE_STATE" > "$WPE_STATE/config/user-dirs.dirs"
+cat > "$WPE_STATE/config/glib-2.0/settings/keyfile" <<KEYS
+[org/gnome/shell]
+enabled-extensions=['$UUID', 'ding@rastersoft.com']
+disable-user-extensions=false
+welcome-dialog-last-shown-version='99'
+KEYS
+export XDG_DATA_HOME=$WPE_STATE/data XDG_CONFIG_HOME=$WPE_STATE/config GSETTINGS_BACKEND=keyfile
+export XDG_DATA_DIRS=$WPE_STATE/data:/usr/local/share:/usr/share XDG_STATE_HOME=$WPE_STATE/state XDG_CACHE_HOME=$WPE_STATE/cache
+echo "state dir: $WPE_STATE"
+timeout 120 dbus-run-session -- bash -c "
+  gnome-shell --headless --wayland --wayland-display=wpe-test --unsafe-mode --virtual-monitor 1920x1080 > '$WPE_STATE/shell.log' 2>&1 &
+  SH=\$!; sleep 8
+  bash '$HERE/session-test.sh' > '$WPE_STATE/test.log' 2>&1
+  kill \$SH 2>/dev/null; wait \$SH 2>/dev/null || true"
+cat "$WPE_STATE/test.log"
+grep '\[wpe-background\]' "$WPE_STATE/shell.log" | cut -d: -f4- || true
