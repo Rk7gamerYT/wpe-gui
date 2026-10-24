@@ -3,7 +3,7 @@ import signal
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QLockFile, QStandardPaths, QUrl
+from PySide6.QtCore import QLockFile, QStandardPaths, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -20,7 +20,13 @@ def main() -> int:
     app = QGuiApplication(sys.argv)
     app.setApplicationName("wpe-gui")
     app.setDesktopFileName("wpe-gui")
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    # Quit properly on SIGTERM (logout, `kill`) and Ctrl+C: the default action would end this process and
+    # leave the engines it started running with nobody to stop them
+    signal.signal(signal.SIGINT, lambda *_: app.quit())
+    signal.signal(signal.SIGTERM, lambda *_: app.quit())
+    wake = QTimer()
+    wake.timeout.connect(lambda: None)
+    wake.start(250)  # gives Python a chance to run the signal handlers while Qt's loop is waiting
 
     # One instance only: each one would restore the saved wallpapers and the engines would pile up
     runtime = QStandardPaths.writableLocation(QStandardPaths.RuntimeLocation) or "/tmp"
