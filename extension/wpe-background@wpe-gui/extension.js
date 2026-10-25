@@ -187,11 +187,27 @@ export default class WpeBackground extends Extension {
             console.log('[wpe-background] moving window actor to background group');
             actor.get_parent()?.remove_child(actor);
             bg.add_child(actor);
-        } else if (bg.get_last_child() !== actor) {
-            bg.set_child_above_sibling(actor, null);
+        }
+        // Sit right above the shell's own background actors, not at the top of the group:
+        // desktop widget extensions (e.g. Desktop Widgets/azclock) add their actors there too.
+        const anchor = bg.get_children().filter(c => c instanceof Meta.BackgroundActor).at(-1) ?? null;
+        if (!this._isAboveBackground(actor, anchor)) {
+            if (anchor)
+                bg.set_child_above_sibling(actor, anchor);
+            else
+                bg.set_child_at_index(actor, 0);
         }
         this._makeClickThrough(actor);
         actor.show();
+    }
+
+    // True when only other wallpaper windows sit between the actor and the anchor (one per monitor).
+    _isAboveBackground(actor, anchor) {
+        for (let c = actor.get_previous_sibling(); c !== anchor; c = c.get_previous_sibling()) {
+            if (!c || !this._pinned.has(c))
+                return false;
+        }
+        return true;
     }
 
     _makeClickThrough(actor) {
