@@ -66,6 +66,30 @@ Rectangle {
             }
         }
 
+        Button {
+            Layout.fillWidth: true
+            visible: loginBackground.supported
+            enabled: !loginBackground.busy
+            text: loginBackground.busy ? "Preparando imagem do login…" : "Usar imagem na tela de login"
+            onClicked: loginDialog.open()
+        }
+        Dialog {
+            id: loginDialog
+            title: "Imagem na tela de login"
+            modal: true
+            anchors.centerIn: Overlay.overlay
+            width: Math.min(460, win.width - 40)
+            standardButtons: Dialog.Ok | Dialog.Cancel
+            Label {
+                width: parent.width
+                wrapMode: Text.Wrap
+                text: "Aplique o wallpaper primeiro. Um dos monitores será reiniciado brevemente para capturar só a cena, sem janelas ou ícones.\n\nA imagem será usada no login antes de entrar na conta. Será solicitada a senha de administrador. A animação continua na área de trabalho."
+            }
+            onAccepted: {
+                if (win.selected) loginBackground.apply(win.selected.path)
+            }
+        }
+
         RowLayout {
             Layout.fillWidth: true
             spacing: 0

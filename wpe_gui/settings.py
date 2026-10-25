@@ -5,6 +5,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from . import autostart
+from .json_store import write_json
+
 CONFIG_PATH = Path.home() / ".config/wpe-gui/settings.json"
 
 DEFAULTS = {
@@ -35,6 +38,7 @@ DEFAULTS = {
 
 class Settings(QObject):
     changed = Signal()
+    error = Signal(str)
 
     def __init__(self, path: Path = CONFIG_PATH, parent=None):
         super().__init__(parent)
@@ -46,15 +50,23 @@ class Settings(QObject):
             pass
 
     def get(self, key):
+        if key == "startOnLogin":
+            return autostart.enabled()
         return self._data.get(key, DEFAULTS.get(key))
 
     @Slot(str, "QVariant")
     def set(self, key, value):
+        if key == "startOnLogin":
+            try:
+                autostart.set_enabled(bool(value))
+            except OSError as exc:
+                self.error.emit(f"Não foi possível alterar a inicialização automática: {exc}")
+            self.changed.emit()
+            return
         if self._data.get(key) == value:
             return
         self._data[key] = value
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(self._data, indent=2))
+        write_json(self._path, self._data)
         self.changed.emit()
 
     @Slot(str, result="QVariant")

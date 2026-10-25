@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal, Slot
 
 from . import library
+from .json_store import write_json
 
 OVERRIDES_PATH = Path.home() / ".config/wpe-gui/overrides.json"
 
@@ -99,8 +100,7 @@ class PropertiesStore(QObject):
             pass
 
     def _save(self):
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(self._data, indent=2))
+        write_json(self._path, self._data)
 
     def _definitions(self, folder: str) -> dict:
         wp = library.read_wallpaper(Path(folder))

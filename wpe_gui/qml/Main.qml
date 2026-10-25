@@ -9,6 +9,12 @@ ApplicationWindow {
     visible: true
     title: "Wallpaper Engine"
     color: "#1b1d23"
+    onClosing: function(close) {
+        if (loginBackground.busy) {
+            close.accepted = false
+            toast.show("Conclua ou cancele a autenticação da tela de login antes de fechar.")
+        }
+    }
 
     property var selected: null
     property string page: "installed"
@@ -60,18 +66,33 @@ ApplicationWindow {
         color: "#15171c"
         Label {
             anchors.verticalCenter: parent.verticalCenter
-            x: 12
+            anchors.left: parent.left
+            anchors.leftMargin: 12
+            anchors.right: playbackButtons.left
+            anchors.rightMargin: 12
+            elide: Text.ElideRight
             font.pixelSize: 12
             opacity: 0.7
             text: backend.running ? "Em execução: " + backend.summary : "Nenhum wallpaper ativo"
         }
-        Button {
+        Row {
+            id: playbackButtons
             anchors.right: parent.right
+            anchors.rightMargin: 8
             anchors.verticalCenter: parent.verticalCenter
-            height: 26
-            text: "Parar"
-            visible: backend.running
-            onClicked: backend.stop()
+            spacing: 6
+            Button {
+                height: 26
+                text: "Restaurar wallpapers"
+                enabled: backend.canRestore
+                onClicked: backend.restore()
+            }
+            Button {
+                height: 26
+                text: "Parar"
+                enabled: backend.running
+                onClicked: backend.stop()
+            }
         }
     }
 

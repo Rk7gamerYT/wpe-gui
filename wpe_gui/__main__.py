@@ -14,6 +14,8 @@ from .staticbackground import StaticBackground
 from .x11hints import WindowHider
 from .models import WallpaperFilter, WallpaperModel
 from .settings import Settings
+from .tray import Tray, ask_running_instance_to_show
+from .login_background import LoginBackground
 
 
 def main() -> int:
@@ -47,6 +49,8 @@ def main() -> int:
     settings = Settings()
     properties = PropertiesStore()
     engine = Engine(settings, properties)
+    login_background = LoginBackground(engine)
+    login_background.message.connect(engine.message.emit)
     properties.changed.connect(engine.propertiesChanged)
     powersaver = PowerSaver(settings, engine)  # noqa: F841 (kept alive by the local reference)
     static_background = StaticBackground(settings, engine)
@@ -60,6 +64,7 @@ def main() -> int:
     ctx = qml.rootContext()
     ctx.setContextProperty("settings", settings)
     ctx.setContextProperty("backend", engine)
+    ctx.setContextProperty("loginBackground", login_background)
     ctx.setContextProperty("properties", properties)
     ctx.setContextProperty("staticBackground", static_background)
     ctx.setContextProperty("library", model)

@@ -22,14 +22,31 @@ Versão inicial (0.1). Já faz:
 - Busca e filtro por tipo
 - Aplica/para o wallpaper (duplo clique ou botão), com **um wallpaper por monitor**, o mesmo **duplicado** em todos ou **esticado** entre eles
 - Ajustes por wallpaper: escala, bordas e as propriedades do próprio wallpaper (sliders, cores, listas...)
-- Restaura os wallpapers ao abrir o app
+- Salva configurações e monitores em `~/.config/wpe-gui/settings.json` e ajustes por wallpaper em `~/.config/wpe-gui/overrides.json`, com gravação atômica
+- Restaura os wallpapers ao abrir o app ou pelo botão **Restaurar wallpapers** na janela e na bandeja; **Parar** preserva o último conjunto salvo
 - **Modo economia:** pausa o wallpaper só no monitor que tiver um app em tela cheia ou maximizado (no GNOME, pela extensão)
 - **Bandeja do sistema:** fechar a janela mantém o app e os wallpapers rodando; o ícone abre a interface de novo (há a opção "Iniciar escondido na bandeja") (no GNOME, usa a extensão AppIndicator, já ativa no Ubuntu)
 - **Fundo estático:** ao fechar o app, o desktop fica com uma imagem do wallpaper em vez de voltar ao fundo antigo (GNOME)
 - **Intensidade do áudio:** global e por wallpaper, para os que reagem ao som
 - Configurações: FPS, volume, mudo, escala, pausa em tela cheia, modo janela
 
+Em Configurações, **Iniciar com o sistema** abre o app ao entrar na sessão do usuário. Mantenha **Restaurar wallpapers ao abrir o app** ligado para reaplicar os wallpapers salvos. Desligar a inicialização automática remove a entrada de autostart.
+
 Planejado: playlists, iniciar com a sessão, Workshop.
+
+### Imagem na tela de login (Ubuntu/GDM)
+
+Depois de aplicar um wallpaper, use **Usar imagem na tela de login** no painel dele.
+O app reinicia brevemente um monitor para capturar a cena com as propriedades atuais,
+sem janelas ou ícones, e pede autenticação de administrador para instalar a imagem
+estática no GDM. A animação continua sendo executada apenas após entrar na conta.
+O recurso utiliza a configuração nativa `com.ubuntu.login-screen` do Ubuntu; não
+modifica o tema nem reinicia o GDM ou encerra sua sessão.
+
+A imagem fica em `/var/lib/wpe-gui/login.png`, acessível antes do login, e a
+configuração em `/usr/share/gdm/dconf/99-wpe-gui`. Para remover a personalização,
+use **Restaurar fundo anterior** nas configurações. A mudança vale para a tela de
+login do sistema, compartilhada entre os usuários; não altera a tela de bloqueio.
 
 ## Executar
 

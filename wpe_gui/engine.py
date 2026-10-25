@@ -3,7 +3,10 @@
 The engine accepts a single --window per process, so in window mode every monitor gets its own process.
 """
 
+import logging
+from logging.handlers import RotatingFileHandler
 import os
+import time
 import shutil
 import signal
 from pathlib import Path
@@ -20,11 +23,28 @@ LAYOUTS = ("independent", "duplicate", "span")
 class Engine(QObject):
     activeChanged = Signal()
     message = Signal(str)
+    savedChanged = Signal()
 
     def __init__(self, settings, properties, parent=None):
         super().__init__(parent)
+        self._log = logging.getLogger("wpe_gui.engine")
+        if not self._log.handlers:
+            log_dir = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "wpe-gui"
+            try:
+                log_dir.mkdir(parents=True, exist_ok=True)
+                handler = RotatingFileHandler(log_dir / "engine.log", maxBytes=1_000_000, backupCount=2)
+                handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+                self._log.addHandler(handler)
+                self._log.setLevel(logging.INFO)
+            except OSError:
+                self._log.addHandler(logging.NullHandler())
+        self._restarts = {}
+        self._failures = {}
+        self._output = {}
+        self._started_at = {}
         self._settings = settings
         self._properties = properties
+        settings.changed.connect(self.savedChanged.emit)
         self._procs: dict[str, QProcess] = {}
         self._assignments: dict[str, str] = {}  # target key -> wallpaper folder
         self._reapply = QTimer(self, singleShot=True, interval=500)
@@ -34,6 +54,10 @@ class Engine(QObject):
         self._silent: dict[str, bool] = {}  # target key -> whether its process was started with --silent
 
     # -- state exposed to QML ------------------------------------------------------------------
+
+    @Property(bool, notify=savedChanged)
+    def canRestore(self):
+        return bool(self._settings.get("assignments"))
 
     @Property(bool, notify=activeChanged)
     def running(self):
@@ -206,7 +230,7 @@ class Engine(QObject):
             return
         keys = self._targets_for(target)
         if keys == [SPAN]:
-            self._stop_keys([k for k in self._procs if k != SPAN])
+            self._stop_keys([k for k in self._assignments if k != SPAN])
         else:
             self._stop_keys([SPAN])
         self._stop_keys(keys)
@@ -216,7 +240,7 @@ class Engine(QObject):
         self._rebalance_audio()
         self._remember()
 
-    def _start(self, key: str, path: str, planned=None):
+    def _start(self, key: str, path: str, planned=None, extra_args=None):
         planned = planned if planned is not None else set(self._assignments) | {key}
         silent = key != self._audible_key(planned)
         proc = QProcess(self)
@@ -228,14 +252,38 @@ class Engine(QObject):
             proc.setProcessEnvironment(env)
         proc.setProcessChannelMode(QProcess.MergedChannels)
         proc.finished.connect(lambda code, _s, k=key, p=proc: self._on_finished(k, p, code))
-        proc.errorOccurred.connect(lambda _e: self.message.emit("Falha ao iniciar o motor."))
-        proc.start(self.binary(), self.build_args(path, key, audible=not silent))
+        proc.readyReadStandardOutput.connect(lambda p=proc: self._read_output(p))
+        proc.errorOccurred.connect(lambda error, k=key, p=proc: self._on_error(k, p, error))
         self._silent[key] = silent
         self._procs[key] = proc
         self._assignments[key] = path
+        self._started_at[proc] = time.monotonic()
+        self._output[proc] = b""
+        proc.start(self.binary(), self.build_args(path, key, audible=not silent) + (extra_args or []))
         self.activeChanged.emit()
 
+    def captureWallpaper(self, path: str, destination: str) -> bool:
+        """Restart one active target with the native capture option, preserving assignments."""
+        keys = [key for key, folder in self._assignments.items() if folder == path]
+        if not keys:
+            self.message.emit("Aplique este wallpaper antes de usar a imagem na tela de login.")
+            return False
+        primary = QGuiApplication.primaryScreen().name()
+        key = primary if primary in keys else keys[0]
+        planned = set(self._assignments)
+        self._stop_keys([key])
+        self._start(key, path, planned, ["--screenshot", destination, "--screenshot-delay", "5"])
+        return True
+
     def _stop_keys(self, keys):
+        keys = list(keys)
+        for key in keys:
+            timer = self._restarts.pop(key, None)
+            if timer:
+                timer.stop()
+                timer.deleteLater()
+            self._failures.pop(key, None)
+            self._assignments.pop(key, None)
         procs = [(k, self._procs.pop(k)) for k in keys if k in self._procs]
         for k, proc in procs:
             proc.finished.disconnect()
@@ -246,37 +294,53 @@ class Engine(QObject):
         for k, proc in procs:  # terminate all first, then wait, so stopping N monitors doesn't take N x 2s
             if not proc.waitForFinished(2000):
                 proc.kill()
-            self._assignments.pop(k, None)
-        if procs:
+            proc.waitForFinished(1000)
+            self._output.pop(proc, None)
+            self._started_at.pop(proc, None)
+            proc.deleteLater()
+        if keys:
             self.activeChanged.emit()
 
     @Slot()
     def stop(self):
-        self._stop_keys(list(self._procs))
-        self._remember()
+        self._stop_keys(list(self._assignments))
 
     def shutdown(self):
         """Stop the processes when the app quits, keeping what was saved so restore() can bring it back."""
-        self._stop_keys(list(self._procs))
+        self._stop_keys(list(self._assignments))
 
     @Slot(str)
     def stopPath(self, path: str):
         """Stop this wallpaper on every monitor it runs on, leaving the others alone."""
         self._stop_keys([k for k, p in self._assignments.items() if p == path])
         self._rebalance_audio()
-        self._remember()
 
     def _remember(self):
         self._settings.set("assignments", dict(self._assignments))
 
     @Slot()
     def restore(self):
-        """Start again what was running last time the app was open."""
+        """Restore the last applied monitor assignments without duplicating processes."""
         saved = self._settings.get("assignments") or {}
         names = set(self._screens_by_name())
         valid = {k: p for k, p in saved.items() if (k == SPAN or k in names) and Path(p).is_dir()}
+        if not valid:
+            self.message.emit("Nenhum wallpaper salvo disponível nos monitores conectados.")
+            return
+        if not self.binary():
+            self.message.emit("linux-wallpaperengine não encontrado. Defina o caminho em Configurações.")
+            return
+        # Leave already running targets alone; repeated Restore clicks are harmless.
+        if SPAN in valid:
+            self._stop_keys([k for k in self._assignments if k != SPAN])
+        else:
+            self._stop_keys([SPAN])
         for key, path in valid.items():
-            self._start(key, path, planned=set(valid))
+            if self._assignments.get(key) == path:
+                continue
+            self._stop_keys([key])
+            self._start(key, path, planned=set(valid) | set(self._assignments))
+        self._rebalance_audio()
 
     @Slot(str)
     def propertiesChanged(self, path: str):
@@ -294,14 +358,45 @@ class Engine(QObject):
                 self._stop_keys([key])
                 self._start(key, path, planned=set(self._assignments) | {key})
 
+    def _read_output(self, proc):
+        # Drain continuously so a verbose engine cannot grow Qt's buffer indefinitely.
+        chunk = bytes(proc.readAllStandardOutput())
+        self._output[proc] = (self._output.get(proc, b"") + chunk)[-8192:]
+
+    def _on_error(self, key, proc, error):
+        if error == QProcess.FailedToStart:
+            self._on_finished(key, proc, -1)
+
+    def _retry(self, key, path, timer):
+        if self._restarts.get(key) is not timer:
+            return
+        del self._restarts[key]
+        timer.deleteLater()
+        if self._assignments.get(key) == path:
+            self._start(key, path, planned=set(self._assignments))
+
     def _on_finished(self, key, proc, code):
-        out = bytes(proc.readAll()).decode(errors="replace").strip().splitlines()
-        if self._procs.get(key) is proc:
-            del self._procs[key]
+        self._read_output(proc)
+        out = self._output.pop(proc, b"").decode(errors="replace").strip()
+        uptime = time.monotonic() - self._started_at.pop(proc, time.monotonic())
+        if self._procs.get(key) is not proc:
+            proc.deleteLater()
+            return
+        del self._procs[key]
+        self._paused.discard(key)
+        path = self._assignments[key]
+        attempts = (0 if uptime >= 120 else self._failures.get(key, 0)) + 1
+        self._failures[key] = attempts
+        self._log.error("target=%s exit=%s uptime=%.1fs attempt=%s error=%s\n%s",
+                        key, code, uptime, attempts, proc.errorString(), out)
+        if attempts <= 3:
+            timer = QTimer(self, singleShot=True, interval=1000 * 2 ** (attempts - 1))
+            timer.timeout.connect(lambda: self._retry(key, path, timer))
+            self._restarts[key] = timer
+            timer.start()
+            self.message.emit(f"O motor encerrou em {key}. Reiniciando ({attempts}/3)…")
+        else:
             self._assignments.pop(key, None)
-            self._paused.discard(key)
-            self.activeChanged.emit()
-            self._rebalance_audio()
-        if code != 0:
-            tail = out[-1] if out else ""
-            self.message.emit(f"O motor encerrou com código {code}. {tail}")
+            self.message.emit(f"O motor falhou repetidamente em {key}. Aplique o wallpaper novamente. {out[-500:]}")
+        self.activeChanged.emit()
+        proc.deleteLater()

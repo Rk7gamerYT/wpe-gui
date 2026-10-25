@@ -6,6 +6,12 @@ import QtQuick.Dialogs
 ScrollView {
     contentWidth: availableWidth
 
+    Connections {
+        target: settings
+        function onChanged() { startOnLogin.checked = settings.value("startOnLogin") }
+        function onError(message) { startupError.text = message }
+    }
+
     GridLayout {
         x: 24; y: 24
         width: Math.min(parent.width - 48, 640)
@@ -203,5 +209,44 @@ ScrollView {
             text: "O app abre só com o ícone na bandeja, sem mostrar a janela. Combine com “Iniciar com o sistema” e “Restaurar wallpapers ao abrir o app”."
         }
 
+        Label { text: "Iniciar com o sistema" }
+        Switch {
+            id: startOnLogin
+            checked: settings.value("startOnLogin")
+            onToggled: {
+                startupError.text = ""
+                settings.set("startOnLogin", checked)
+            }
+        }
+        Label {
+            Layout.columnSpan: 2
+            Layout.fillWidth: true
+            text: "Abre o app ao entrar na sessão. Ative a restauração acima para aplicar os wallpapers automaticamente."
+            wrapMode: Text.Wrap
+            opacity: 0.7
+        }
+        Label {
+            id: startupError
+            Layout.columnSpan: 2
+            Layout.fillWidth: true
+            visible: text !== ""
+            wrapMode: Text.Wrap
+            color: "#ff8080"
+        }
+        Label { text: "Fundo da tela de login"; visible: loginBackground.supported }
+        Button {
+            visible: loginBackground.supported
+            enabled: !loginBackground.busy
+            text: "Restaurar fundo anterior"
+            onClicked: resetLoginDialog.open()
+        }
+        Dialog {
+            id: resetLoginDialog
+            title: "Restaurar fundo do login"
+            modal: true
+            standardButtons: Dialog.Ok | Dialog.Cancel
+            Label { text: "Remove a imagem definida pelo app.\nSerá solicitada a senha de administrador." }
+            onAccepted: loginBackground.reset()
+        }
     }
 }

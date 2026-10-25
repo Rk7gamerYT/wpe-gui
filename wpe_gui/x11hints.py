@@ -66,29 +66,30 @@ def let_input_through(window: str) -> bool:
 
 
 class WindowHider(QObject):
-    """After wallpapers start, watch for their windows for a few seconds and mark each one."""
+    """Maintain X11 input transparency for the entire lifetime of the wallpaper.
 
-    ATTEMPTS = 20
-    INTERVAL_MS = 500
+    X11 resource IDs are reused after an engine restart, and input shapes may be
+    reset when windows are resized/remapped. Never cache an ID as permanently fixed.
+    """
+
+    INTERVAL_MS = 1000
 
     def __init__(self, engine, parent=None):
         super().__init__(parent)
-        self._left = 0
-        self._passthrough: set[str] = set()  # window ids already made input-transparent
+        self._engine = engine
         self._timer = QTimer(self, interval=self.INTERVAL_MS)
         self._timer.timeout.connect(self._tick)
         engine.activeChanged.connect(self.watch)
+        self.watch()
 
     def watch(self):
-        self._left = self.ATTEMPTS
-        if not self._timer.isActive():
-            self._timer.start()
+        if self._engine.running:
+            if not self._timer.isActive():
+                self._timer.start()
+        else:
+            self._timer.stop()
 
     def _tick(self):
         for window in engine_windows():
             mark_as_desktop(window)
-            if window not in self._passthrough and let_input_through(window):
-                self._passthrough.add(window)
-        self._left -= 1
-        if self._left <= 0:
-            self._timer.stop()
+            let_input_through(window)
