@@ -6,14 +6,25 @@ Interface gráfica (Qt6/QML) para o [linux-wallpaperengine](https://github.com/A
 
 ## Instalação
 
+**Copie e cole este único comando no terminal, sem sudo:**
+
 ```bash
-git clone https://github.com/Rk7gamerYT/wpe-gui.git && cd wpe-gui
-./install.sh --dry-run   # mostra o que seria feito
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/Rk7gamerYT/wpe-gui/main/install-online.sh | bash
 ```
 
-O script cuida de Ubuntu/Debian, Fedora e Arch (e derivadas). Guia completo, passo a passo por distro, Steam, GNOME, KDE e problemas comuns: **[docs/INSTALL.md](docs/INSTALL.md)**.
+Ele baixa o app, instala as dependências, compila o motor com os patches, configura
+seu caminho e instala a integração KDE/GNOME. Depois, abra **Wallpaper Engine** pelo
+menu de aplicativos. A compilação leva alguns minutos e solicita sua senha para instalar pacotes.
+Você ainda precisa ter o Wallpaper Engine instalado pela Steam e baixar os wallpapers pela Oficina.
 
+Para atualizar, encerre o app pela bandeja e execute o mesmo comando novamente.
+O app fica em `~/.local/share/wpe-gui/app`; suas preferências são preservadas.
+O log da instalação fica em `~/.local/state/wpe-gui/install.log`.
+
+Se já baixou o código, `./install.sh` também instala tudo. Para conferir os comandos
+sem instalar, use `./install.sh --dry-run`.
+
+Guia por distro: **[docs/INSTALL.md](docs/INSTALL.md)**.
 Para **Ubuntu 26.04 com KDE Plasma**, veja o [passo a passo dedicado](docs/KDE-UBUNTU-26.04.md).
 
 ## Status

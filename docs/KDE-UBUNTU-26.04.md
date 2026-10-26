@@ -48,12 +48,13 @@ Execute os comandos como seu usuário normal; não rode o instalador inteiro com
 Ele solicita autenticação apenas para instalar os pacotes do sistema.
 
 ```bash
-sudo apt install git
-git clone https://github.com/Rk7gamerYT/wpe-gui.git
-cd wpe-gui
-./install.sh --dry-run
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/Rk7gamerYT/wpe-gui/main/install-online.sh | bash
 ```
+
+Não é necessário clonar o projeto, instalar o motor à parte ou preencher seu caminho.
+Quando terminar, abra **Wallpaper Engine** pelo menu de aplicativos.
+O app fica em `~/.local/share/wpe-gui/app` e o log em
+`~/.local/state/wpe-gui/install.log`.
 
 O instalador:
 
@@ -82,11 +83,13 @@ Os novos arquivos ficam em:
 
 ## 4. Aplicar um wallpaper
 
+Abra **Wallpaper Engine** pelo menu de aplicativos. Para executar pelo terminal:
+
 ```bash
-./wpe-gui.sh
+~/.local/bin/wpe-gui
 ```
 
-Também é possível abrir **Wallpaper Engine** pelo menu de aplicativos.
+Se instalou manualmente a partir de um clone Git, também pode usar `./wpe-gui.sh` dentro dele.
 
 1. Escolha um wallpaper na biblioteca e clique em **Aplicar**.
 2. Com vários monitores, use a seta ao lado do botão para escolher o destino.
@@ -128,7 +131,17 @@ Não é preciso habilitá-la permanentemente nas configurações do KWin.
 
 ## Atualizar
 
-Encerre o app pelo menu da bandeja antes de atualizar.
+Encerre o app pelo menu da bandeja antes de atualizar. Se instalou pelo comando único,
+execute-o novamente:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Rk7gamerYT/wpe-gui/main/install-online.sh | bash
+```
+
+Se aparecer a orientação para recarregar o Plasma, execute
+`systemctl --user restart plasma-plasmashell.service` e reabra o app.
+
+Para um clone Git, use:
 
 ```bash
 cd /caminho/para/wpe-gui

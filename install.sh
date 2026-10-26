@@ -136,15 +136,26 @@ build_engine() {
     else
         (cd "$ENGINE_DIR/build" && cmake -DCMAKE_BUILD_TYPE=Release .. && nice -n 10 make -j"$jobs")
     fi
+    if [ "$DRY" = 0 ] && [ ! -x "$ENGINE_DIR/build/output/linux-wallpaperengine" ]; then
+        die "a compilação terminou sem gerar o motor; verifique os erros acima."
+    fi
     run mkdir -p "$BIN_DIR"
     run ln -sf "$ENGINE_DIR/build/output/linux-wallpaperengine" "$BIN_DIR/linux-wallpaperengine"
-    case ":$PATH:" in *":$BIN_DIR:"*) ;; *) warn "$BIN_DIR não está no seu PATH; adicione-o ao ~/.profile." ;; esac
+    # The app also discovers this location when the desktop session omits it from PATH.
 }
 
 # --- app ------------------------------------------------------------------------------------------------------
 install_app() {
     say "Aplicativo (ambiente Python, ícone e menu)"
     run "$HERE/wpe-gui.sh" --install-desktop
+    run mkdir -p "$BIN_DIR"
+    run ln -sf "$HERE/wpe-gui.sh" "$BIN_DIR/wpe-gui"
+    say "Verificando o motor e configurando o aplicativo"
+    if [ "$DO_ENGINE" = 1 ]; then
+        run env PYTHONPATH="$HERE" "$HERE/.venv/bin/python" -m wpe_gui.install_config "$ENGINE_DIR/build/output/linux-wallpaperengine"
+    else
+        run env PYTHONPATH="$HERE" "$HERE/.venv/bin/python" -m wpe_gui.install_config
+    fi
 }
 
 desktop_has() {
@@ -177,6 +188,15 @@ say "wpe-gui: instalação  (distro: $FAM$MODE_LABEL)"
 if [ "$DO_DEPS" = 1 ] && [ "$FAM" = unknown ]; then
     die "Distro não reconhecida. Instale as dependências à mão (docs/INSTALL.md) e rode com --no-deps."
 fi
+if [ "$DRY" = 0 ] && [ "$EUID" = 0 ]; then
+    die "execute como seu usuário normal, sem sudo; o instalador solicita a senha quando necessário."
+fi
+if [ "$DRY" = 0 ]; then
+    LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/wpe-gui"
+    mkdir -p "$LOG_DIR"
+    exec > >(tee -a "$LOG_DIR/install.log") 2>&1
+    trap 'echo "Instalação interrompida. Consulte o erro acima e o log em $LOG_DIR/install.log." >&2' ERR
+fi
 if [ "$DRY" = 0 ] && [ "$ASSUME_YES" = 0 ]; then
     read -r -p "Vou instalar pacotes com sudo e compilar o motor (leva alguns minutos). Continuar? [s/N] " ans
     case "$ans" in s|S|sim|y|Y) ;; *) echo "Cancelado."; exit 1 ;; esac
@@ -195,7 +215,8 @@ fi
 
 say "Pronto"
 cat <<'EOF'
-Falta só o Wallpaper Engine do Steam instalado (é dele que vêm o wallpapers e os assets):
+Aplicativo e motor instalados e configurados.
+Você precisa ter o Wallpaper Engine do Steam instalado (é dele que vêm os wallpapers e os assets):
 veja "Wallpaper Engine no Steam" em docs/INSTALL.md.
 Abra o app pelo menu de aplicativos ("Wallpaper Engine") ou com ./wpe-gui.sh
 EOF

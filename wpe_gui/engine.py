@@ -7,7 +7,6 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 import time
-import shutil
 import signal
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from PySide6.QtGui import QGuiApplication
 
 from . import library
 from .kde import native_wayland, screen_alias
+from .engine_locator import locate_engine
 
 SPAN = "*"  # target key of the single process covering every monitor
 LAYOUTS = ("independent", "duplicate", "span")
@@ -123,8 +123,7 @@ class Engine(QObject):
         return bool(self._settings.get("windowed")) and not native_wayland()
 
     def binary(self) -> str | None:
-        custom = self._settings.get("enginePath")
-        return custom if custom else shutil.which("linux-wallpaperengine")
+        return locate_engine(self._settings.get("enginePath"))
 
     def build_args(self, path: str, target: str, audible: bool = True) -> list[str]:
         s = self._settings

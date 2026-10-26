@@ -28,11 +28,30 @@ O **wpe-gui** é só a interface. Para funcionar você precisa de três coisas:
 
 ## Instalação rápida (script)
 
+Um comando instala o app, o motor com os patches e a integração do ambiente:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Rk7gamerYT/wpe-gui/main/install-online.sh | bash
+```
+
+Execute como seu usuário normal, sem `sudo` antes do comando. A senha é solicitada
+para instalar os pacotes. Não é necessário clonar o repositório, configurar o
+caminho do motor nem alterar o `PATH`. Ao concluir, abra **Wallpaper Engine** pelo menu.
+O mesmo comando atualiza uma instalação feita por ele; encerre o app antes de atualizar.
+
+O código fica em `~/.local/share/wpe-gui/app` e o motor em
+`~/.local/share/wpe-gui/linux-wallpaperengine`. Um diretório de dados XDG personalizado
+altera o local do app. O instalador verifica se o motor executa e salva seu caminho
+absoluto, preservando as preferências e os wallpapers salvos.
+O log fica em `~/.local/state/wpe-gui/install.log` (ou em `$XDG_STATE_HOME/wpe-gui/install.log`).
+
+Para quem prefere trabalhar com o código:
+
 ```bash
 git clone https://github.com/Rk7gamerYT/wpe-gui.git
 cd wpe-gui
-./install.sh --dry-run   # só mostra o que seria feito, sem alterar nada
-./install.sh             # instala
+./install.sh --dry-run
+./install.sh
 ```
 
 O script reconhece Ubuntu/Debian e derivadas, Fedora e Arch e derivadas. Ele:
@@ -230,6 +249,7 @@ reaplica os wallpapers salvos ao iniciar a sessão.
 | KDE: wallpaper some quando aparecem ícones | Atualize com `./kde/install.sh` e reinicie o Plasma: `systemctl --user restart plasma-plasmashell.service`. O plugin precisa deixar transparente também a janela dos ícones. |
 | KDE: pausa automática não funciona | Veja a verificação da extensão KWin no [guia KDE](KDE-UBUNTU-26.04.md#verificar-a-integração). |
 | Wallpaper fica **preto** | Provavelmente o patch de shaders não está no motor. Confira com `linux-wallpaperengine --help \| grep audio-gain` (se não aparecer, o motor está sem os patches). |
+| O app não encontra o motor | Execute novamente o instalador completo. Ele verifica o executável e configura o caminho automaticamente. O app também procura em `~/.local/bin`, mesmo quando a sessão não inclui essa pasta no `PATH`. |
 | O motor fecha na hora | Rode o mesmo comando do app na mão para ver o erro. Um clássico é `pattern '100.0' does not match` (versões antigas do app). |
 | `Failed to initialize GLEW` | No GNOME, use o **modo janela**. No KDE, o aviso pode ser seguido de `continuing with EGL context`: se o wallpaper renderiza, não é uma falha fatal. |
 | Wallpaper aparece **por cima** das janelas | A extensão do GNOME não está carregada. Saia e entre na sessão e confira `gnome-extensions info wpe-background@wpe-gui`. |
@@ -241,7 +261,12 @@ reaplica os wallpapers salvos ao iniciar a sessão.
 
 ## Atualizar e desinstalar
 
-**Atualizar:**
+**Atualizar instalação pelo comando único:**
+
+Encerre o app pela bandeja e execute novamente o comando da instalação rápida.
+Se o instalador solicitar recarregar o Plasma, use o comando indicado.
+
+**Atualizar um clone Git:**
 
 ```bash
 cd /caminho/para/wpe-gui
