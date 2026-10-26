@@ -4,13 +4,14 @@ O **wpe-gui** é só a interface. Para funcionar você precisa de três coisas:
 
 1. o **motor** [linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine), compilado com os patches deste projeto;
 2. o **Wallpaper Engine do Steam** instalado (os wallpapers e os assets vêm dele, o projeto não os inclui);
-3. o próprio app, mais, no GNOME, uma extensão que coloca o wallpaper atrás das janelas.
+3. o próprio app e a integração do ambiente: extensão GNOME ou plugin Plasma e extensão KWin no KDE.
 
-> **O que foi testado.** Tudo foi desenvolvido e testado no **Ubuntu 26.04 (GNOME 50, Wayland)**. As listas de pacotes do
+> **O que foi testado.** Testado no **Ubuntu 26.04 com GNOME 50 e com KDE Plasma 6, em Wayland**. As listas de pacotes do
 > Fedora e do Arch vêm do README do motor e **não foram testadas pelo autor**. Se algo falhar, abra uma issue com a saída do erro.
 
 ## Sumário
 
+- [KDE no Ubuntu 26.04: guia completo](KDE-UBUNTU-26.04.md)
 - [Instalação rápida (script)](#instalação-rápida-script)
 - [Passo a passo por distro](#passo-a-passo-por-distro)
   - [Ubuntu, Debian, Linux Mint, Pop!_OS](#ubuntu-debian-linux-mint-pop_os)
@@ -40,10 +41,10 @@ O script reconhece Ubuntu/Debian e derivadas, Fedora e Arch e derivadas. Ele:
 2. baixa o motor na versão certa, aplica os patches e compila, **com poucos jobs de propósito** (cerca de 2 GB de memória
    por job), para não travar o computador;
 3. instala o app, o ícone e a entrada no menu de aplicativos;
-4. no GNOME, instala a extensão.
+4. detecta a sessão atual: no GNOME instala a extensão; no KDE instala o plugin Plasma e a extensão KWin.
 
 Opções: `--yes` (não perguntar), `--no-deps` (você já tem os pacotes), `--no-engine` (você já tem o motor com os patches),
-`--no-gnome`. Depois, falta só o [Wallpaper Engine no Steam](#wallpaper-engine-no-steam).
+`--no-gnome` e `--no-kde`. Depois, falta só o [Wallpaper Engine no Steam](#wallpaper-engine-no-steam).
 
 ## Passo a passo por distro
 
@@ -163,7 +164,24 @@ Se o disco com o Steam for NTFS (de um Windows), monte-o com o driver `ntfs3`; s
 
 ## Ambiente gráfico
 
-### GNOME (Wayland) — o caso testado
+### KDE Plasma 6 (Wayland) — testado no Ubuntu 26.04
+
+Veja o [passo a passo completo para KDE no Ubuntu 26.04](KDE-UBUNTU-26.04.md),
+incluindo instalar o KDE ao lado do GNOME, instalar o app e solucionar fundo preto.
+
+Se já estiver na sessão Plasma:
+
+```bash
+./install.sh
+./wpe-gui.sh
+```
+
+O instalador detecta o KDE. Para um app e motor já instalados, basta `./kde/install.sh`.
+O app seleciona o modo Wayland nativo automaticamente, preserva ícones e widgets,
+restaura as atribuições por monitor e carrega a extensão KWin para pausar o wallpaper
+nos monitores cobertos por uma janela maximizada ou em tela cheia.
+
+### GNOME (Wayland) — testado no Ubuntu 26.04
 
 O GNOME não oferece o protocolo que os outros ambientes usam para fixar um programa no fundo da tela (`layer-shell`).
 Por isso, no GNOME:
@@ -188,7 +206,7 @@ Por isso, no GNOME:
 Deve funcionar com o modo janela, pois o app marca a janela do motor como "desktop" e a deixa transparente para cliques.
 A extensão do GNOME não se aplica. **Não foi testado pelo autor.**
 
-### KDE Plasma, Hyprland, Sway e outros com `layer-shell`
+### Hyprland, Sway e outros com `layer-shell`
 
 O motor tem o modo `--screen-root` (fixa o wallpaper no fundo sem precisar de janela). Nesses ambientes, **desligue o "modo janela"**
 nas configurações. **Não foi testado pelo autor.** A extensão do GNOME não se aplica.
@@ -201,17 +219,19 @@ nas configurações. **Não foi testado pelo autor.** A extensão do GNOME não 
 4. Feche a janela: o app continua na bandeja. Clique no ícone para abrir de novo.
 
 Dica: para o app subir sozinho e silencioso, como o Steam, ligue **Iniciar escondido na bandeja** nas configurações e
-adicione `/caminho/para/wpe-gui/wpe-gui.sh --minimized` aos aplicativos de inicialização do seu ambiente (no GNOME, o app
-*Ajustes* → *Aplicativos de inicialização*, ou um arquivo em `~/.config/autostart/`).
+ligue **Iniciar com o sistema** no próprio app. A opção **Restaurar wallpapers ao abrir o app**
+reaplica os wallpapers salvos ao iniciar a sessão.
 
 ## Problemas comuns
 
 | Sintoma | Causa e solução |
 |---|---|
 | O computador trava ao compilar o motor | Jobs demais. Use `make -j2` ou `-j3`. No Ubuntu, o `systemd-oomd` derruba a sessão sob pressão de memória; ter *zram*/swap maior ajuda. |
+| KDE: wallpaper some quando aparecem ícones | Atualize com `./kde/install.sh` e reinicie o Plasma: `systemctl --user restart plasma-plasmashell.service`. O plugin precisa deixar transparente também a janela dos ícones. |
+| KDE: pausa automática não funciona | Veja a verificação da extensão KWin no [guia KDE](KDE-UBUNTU-26.04.md#verificar-a-integração). |
 | Wallpaper fica **preto** | Provavelmente o patch de shaders não está no motor. Confira com `linux-wallpaperengine --help \| grep audio-gain` (se não aparecer, o motor está sem os patches). |
 | O motor fecha na hora | Rode o mesmo comando do app na mão para ver o erro. Um clássico é `pattern '100.0' does not match` (versões antigas do app). |
-| `Failed to initialize GLEW` | Wayland nativo. Use o **modo janela** (o app já força XWayland nele). |
+| `Failed to initialize GLEW` | No GNOME, use o **modo janela**. No KDE, o aviso pode ser seguido de `continuing with EGL context`: se o wallpaper renderiza, não é uma falha fatal. |
 | Wallpaper aparece **por cima** das janelas | A extensão do GNOME não está carregada. Saia e entre na sessão e confira `gnome-extensions info wpe-background@wpe-gui`. |
 | Apps X11 (Steam, xterm...) não respondem a cliques | Corrigido no app atual: atualize (`git pull`) e reinicie o app. |
 | Sem som no wallpaper | Desligue "Silenciar quando outro app tocar áudio". Com vários monitores só um wallpaper toca (o do monitor principal). |
@@ -224,17 +244,22 @@ adicione `/caminho/para/wpe-gui/wpe-gui.sh --minimized` aos aplicativos de inici
 **Atualizar:**
 
 ```bash
-cd /caminho/para/wpe-gui && git pull
+cd /caminho/para/wpe-gui
+git pull --ff-only
 ./install.sh --no-deps     # recompila o motor se os patches mudaram e atualiza a extensão
 ```
 
-Depois reinicie o app e, se a extensão mudou, saia e entre na sessão.
+Depois reinicie o app. No GNOME, se a extensão mudou, saia e entre na sessão.
+No KDE, se o plugin mudou, reinicie o Plasma com
+`systemctl --user restart plasma-plasmashell.service` antes de reabrir o app.
 
 **Desinstalar:**
 
 ```bash
 ./wpe-gui.sh --uninstall-desktop
 gnome-extensions uninstall wpe-background@wpe-gui   # só no GNOME
+# Só no KDE, após restaurar o fundo anterior e encerrar o app:
+rm -rf ~/.local/share/plasma/wallpapers/org.wpegui.wallpaper ~/.local/share/kwin/scripts/wpe-gui
 rm -f ~/.local/bin/linux-wallpaperengine ~/.local/bin/wpe-gui
 rm -rf ~/.local/share/wpe-gui ~/.config/wpe-gui      # motor compilado, imagens geradas e configurações
 ```

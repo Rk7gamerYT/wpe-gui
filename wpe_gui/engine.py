@@ -15,6 +15,7 @@ from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Property, QTi
 from PySide6.QtGui import QGuiApplication
 
 from . import library
+from .kde import native_wayland, screen_alias
 
 SPAN = "*"  # target key of the single process covering every monitor
 LAYOUTS = ("independent", "duplicate", "span")
@@ -54,6 +55,10 @@ class Engine(QObject):
         self._silent: dict[str, bool] = {}  # target key -> whether its process was started with --silent
 
     # -- state exposed to QML ------------------------------------------------------------------
+
+    @Property(bool, constant=True)
+    def nativeDesktop(self):
+        return native_wayland()
 
     @Property(bool, notify=savedChanged)
     def canRestore(self):
@@ -114,6 +119,9 @@ class Engine(QObject):
 
     # -- command line --------------------------------------------------------------------------
 
+    def windowed(self):
+        return bool(self._settings.get("windowed")) and not native_wayland()
+
     def binary(self) -> str | None:
         custom = self._settings.get("enginePath")
         return custom if custom else shutil.which("linux-wallpaperengine")
@@ -141,12 +149,15 @@ class Engine(QObject):
         else:
             selected = [screens.get(target) or QGuiApplication.primaryScreen()]
         # --scaling/--clamp/--bg apply to the preceding --window/--screen-root/--screen-span
-        if s.get("windowed"):
+        if self.windowed():
             args += ["--window", self._geometry(selected)]
         elif target == SPAN:
             args += ["--screen-span", ",".join(sc.name() for sc in selected)]
         else:
             args += ["--screen-root", selected[0].name()]
+
+        if native_wayland():
+            args += ["--layer", "background"]
 
         options = self._properties.engine_options(path)
         if library.audio_responsive(path):
@@ -244,7 +255,7 @@ class Engine(QObject):
         planned = planned if planned is not None else set(self._assignments) | {key}
         silent = key != self._audible_key(planned)
         proc = QProcess(self)
-        if self._settings.get("windowed"):
+        if self.windowed():
             # GLEW can't initialise on native Wayland; run the window through XWayland
             env = QProcessEnvironment.systemEnvironment()
             env.remove("WAYLAND_DISPLAY")
@@ -323,6 +334,17 @@ class Engine(QObject):
         """Restore the last applied monitor assignments without duplicating processes."""
         saved = self._settings.get("assignments") or {}
         names = set(self._screens_by_name())
+        migrated = {}
+        for key, path in saved.items():
+            matches = [name for name in names if screen_alias(name) == screen_alias(key)]
+            new_key = matches[0] if key not in names and len(matches) == 1 else key
+            # Never replace an assignment already saved under the current connector name.
+            if new_key != key and new_key in saved:
+                continue
+            migrated[new_key] = path
+        if migrated != saved:
+            self._settings.set("assignments", migrated)
+        saved = migrated
         valid = {k: p for k, p in saved.items() if (k == SPAN or k in names) and Path(p).is_dir()}
         if not valid:
             self.message.emit("Nenhum wallpaper salvo disponível nos monitores conectados.")

@@ -2,8 +2,8 @@
 
 Like the Windows Wallpaper Engine, whatever is on screen when the app is closed stays as the desktop background
 instead of the previous (unrelated) picture coming back. While wallpapers run, a frame of each one is captured,
-the frames are laid out like the monitors, and the result is set as the GNOME background ('spanned', so every
-monitor shows its own part).
+the frames are laid out like the monitors. GNOME uses the composed image in spanned mode;
+Plasma uses a crop for each monitor through the wpe-gui wallpaper plugin.
 """
 
 import hashlib
@@ -17,6 +17,7 @@ from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QRect, QTimer
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter
 
 from . import library
+from .kde import is_kde, native_wayland
 from .engine import SPAN
 
 OUTPUT_DIR = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "wpe-gui"
@@ -108,8 +109,8 @@ class StaticBackground(QObject):
 
     @Property(bool, notify=supportedChanged)
     def supported(self):
-        """GNOME's background setting is available."""
-        return gsettings("get", SCHEMA, "picture-uri") is not None
+        """The current session has a supported desktop background backend."""
+        return native_wayland() or (not is_kde() and gsettings("get", SCHEMA, "picture-uri") is not None)
 
     # -- when to refresh -----------------------------------------------------------------------
 
@@ -120,7 +121,7 @@ class StaticBackground(QObject):
             (key, path, tuple(props.engine_args(path)), tuple(sorted(props.engine_options(path).items())))
             for key, path in sorted(self._engine._assignments.items())
         ]
-        parts.append((self._settings.get("scaling"), self._settings.get("clamping"), self._settings.get("layout")))
+        parts.append((os.environ.get("XDG_CURRENT_DESKTOP", ""), self._settings.get("scaling"), self._settings.get("clamping"), self._settings.get("layout")))
         screens = [(s.name(), s.geometry().getRect()) for s in QGuiApplication.screens()]
         return hashlib.sha1(repr((parts, screens)).encode()).hexdigest()
 
@@ -168,7 +169,7 @@ class StaticBackground(QObject):
             "--screenshot", str(destination), "--screenshot-delay", "5",
         ]
         proc = QProcess(self)
-        if self._settings.get("windowed"):
+        if self._engine.windowed():
             env = QProcessEnvironment.systemEnvironment()
             env.remove("WAYLAND_DISPLAY")
             env.insert("XDG_SESSION_TYPE", "x11")
@@ -225,11 +226,29 @@ class StaticBackground(QObject):
         self._settings.set("staticSignature", self._signature_at_start)
         self.apply_to_desktop(destination)
         for old in OUTPUT_DIR.glob("static-background-*.png"):
-            if old != destination:
+            if old != destination and not old.stem.startswith(destination.stem + "-"):
                 old.unlink(missing_ok=True)
         self.updated.emit()
 
     def apply_to_desktop(self, image: Path):
+        if is_kde():
+            desktop = getattr(self._engine, "plasma_desktop", None)
+            if desktop is None:
+                return
+            composite = QImage(str(image))
+            screens = QGuiApplication.screens()
+            union = QRect()
+            for screen in screens:
+                union = union.united(screen.geometry())
+            images = {}
+            for screen in screens:
+                path = image.with_name(image.stem + "-" + hashlib.sha1(screen.name().encode()).hexdigest()[:8] + ".png")
+                rect = screen.geometry().translated(-union.topLeft())
+                if composite.copy(rect).save(str(path), "PNG"):
+                    images[screen.name()] = path.resolve().as_uri()
+            self._settings.set("kdeStaticImages", images)
+            desktop.update()
+            return
         if gsettings("get", SCHEMA, "picture-uri") is None:
             return
         if not self._settings.get("originalBackground"):  # remember what the user had, once
@@ -242,6 +261,17 @@ class StaticBackground(QObject):
     @Slot()
     def restoreOriginal(self):
         """Give the desktop the background it had before the app first replaced it."""
+        if is_kde():
+            desktop = getattr(self._engine, "plasma_desktop", None)
+            if desktop is not None:
+                try:
+                    desktop.restore()
+                except RuntimeError as exc:
+                    self._engine.message.emit(f"Não foi possível restaurar o fundo do Plasma: {exc}")
+                    return
+            self._settings.set("staticSignature", "")
+            self._settings.set("staticBackground", False)
+            return
         original = self._settings.get("originalBackground") or {}
         for key in KEYS:
             if original.get(key):

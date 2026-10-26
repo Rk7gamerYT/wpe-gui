@@ -12,7 +12,9 @@ git clone https://github.com/Rk7gamerYT/wpe-gui.git && cd wpe-gui
 ./install.sh
 ```
 
-O script cuida de Ubuntu/Debian, Fedora e Arch (e derivadas). Guia completo, passo a passo por distro, Steam, GNOME e problemas comuns: **[docs/INSTALL.md](docs/INSTALL.md)**.
+O script cuida de Ubuntu/Debian, Fedora e Arch (e derivadas). Guia completo, passo a passo por distro, Steam, GNOME, KDE e problemas comuns: **[docs/INSTALL.md](docs/INSTALL.md)**.
+
+Para **Ubuntu 26.04 com KDE Plasma**, veja o [passo a passo dedicado](docs/KDE-UBUNTU-26.04.md).
 
 ## Status
 
@@ -24,15 +26,15 @@ Versão inicial (0.1). Já faz:
 - Ajustes por wallpaper: escala, bordas e as propriedades do próprio wallpaper (sliders, cores, listas...)
 - Salva configurações e monitores em `~/.config/wpe-gui/settings.json` e ajustes por wallpaper em `~/.config/wpe-gui/overrides.json`, com gravação atômica
 - Restaura os wallpapers ao abrir o app ou pelo botão **Restaurar wallpapers** na janela e na bandeja; **Parar** preserva o último conjunto salvo
-- **Modo economia:** pausa o wallpaper só no monitor que tiver um app em tela cheia ou maximizado (no GNOME, pela extensão)
+- **Modo economia:** pausa o wallpaper só no monitor que tiver um app em tela cheia ou maximizado (pelas extensões GNOME ou KWin no KDE)
 - **Bandeja do sistema:** fechar a janela mantém o app e os wallpapers rodando; o ícone abre a interface de novo (há a opção "Iniciar escondido na bandeja") (no GNOME, usa a extensão AppIndicator, já ativa no Ubuntu)
-- **Fundo estático:** ao fechar o app, o desktop fica com uma imagem do wallpaper em vez de voltar ao fundo antigo (GNOME)
+- **Fundo estático:** ao fechar o app, o desktop fica com uma imagem do wallpaper em vez de voltar ao fundo antigo (GNOME e KDE Plasma/Wayland)
 - **Intensidade do áudio:** global e por wallpaper, para os que reagem ao som
 - Configurações: FPS, volume, mudo, escala, pausa em tela cheia, modo janela
 
 Em Configurações, **Iniciar com o sistema** abre o app ao entrar na sessão do usuário. Mantenha **Restaurar wallpapers ao abrir o app** ligado para reaplicar os wallpapers salvos. Desligar a inicialização automática remove a entrada de autostart.
 
-Planejado: playlists, iniciar com a sessão, Workshop.
+Planejado: playlists e integração com o Workshop.
 
 ### Imagem na tela de login (Ubuntu/GDM)
 
@@ -45,7 +47,7 @@ modifica o tema nem reinicia o GDM ou encerra sua sessão.
 
 A imagem fica em `/var/lib/wpe-gui/login.png`, acessível antes do login, e a
 configuração em `/usr/share/gdm/dconf/99-wpe-gui`. Para remover a personalização,
-use **Restaurar fundo anterior** nas configurações. A mudança vale para a tela de
+use **Restaurar o fundo de antes** nas configurações. A mudança vale para a tela de
 login do sistema, compartilhada entre os usuários; não altera a tela de bloqueio.
 
 ## Executar
@@ -70,6 +72,32 @@ Duas funções dependem de patches no `linux-wallpaperengine`, em `patches/` (fe
 - **`0002` — `--audio-gain`:** multiplica o espectro de áudio que os wallpapers recebem; é o que a "Intensidade do áudio" usa.
 
 Com o motor sem os patches, o app funciona, mas esses dois recursos não têm efeito.
+
+## KDE Plasma 6 (Wayland)
+
+Instale o plugin de wallpaper do Plasma e a extensão do KWin, sem sudo:
+
+```bash
+./kde/install.sh
+./wpe-gui.sh
+```
+
+O app usa automaticamente o modo Wayland nativo no KDE, mesmo se o modo janela
+ficou salvo de uma sessão GNOME. O plugin **Wallpaper Engine (wpe-gui)** mantém
+o desktop transparente sobre a animação, preservando os ícones, widgets e painéis.
+Ao parar ou sair do app, mostra a última imagem estática capturada por monitor.
+A opção **Restaurar o fundo de antes** devolve o plugin e a imagem anteriores do Plasma.
+Para o fundo estático, mantenha essa opção habilitada e aguarde a captura inicial.
+
+A extensão KWin é carregada pelo app e descarregada ao sair. Ela informa quais
+monitores estão cobertos por janelas em tela cheia ou maximizada, respeitando a
+área de trabalho, atividade e janelas minimizadas. Não é necessário ativar a
+extensão do GNOME. Ao migrar, conexões `HDMI-3` são reconhecidas como `HDMI-A-3`.
+
+Para atualizar a integração, rode `./kde/install.sh` novamente e reabra o app.
+Se o QML do plugin foi alterado, reinicie o Plasma com
+`systemctl --user restart plasma-plasmashell.service` para limpar o código em cache.
+A integração atual é para Plasma 6 em Wayland; não altera o fundo do SDDM.
 
 ## GNOME (Wayland)
 

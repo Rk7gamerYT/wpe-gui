@@ -138,7 +138,7 @@ ScrollView {
             wrapMode: Text.Wrap
             opacity: 0.6
             font.pixelSize: 11
-            text: "O wallpaper é pausado só no monitor que tiver o app. No GNOME isso depende da extensão instalada."
+            text: "O wallpaper é pausado só no monitor que tiver o app. No GNOME usa a extensão GNOME; no KDE usa a extensão KWin."
         }
 
         Label { text: "Desativar interação do mouse" }
@@ -151,8 +151,8 @@ ScrollView {
             onActivated: settings.set("scaling", currentText)
         }
 
-        Label { text: "Modo janela (para GNOME/Wayland sem layer-shell)" }
-        Switch { checked: settings.value("windowed"); onToggled: settings.set("windowed", checked) }
+        Label { text: backend.nativeDesktop ? "Integração nativa com KDE Plasma ativa" : "Modo janela (para GNOME/Wayland)" }
+        Switch { enabled: !backend.nativeDesktop; checked: !backend.nativeDesktop && settings.value("windowed"); onToggled: settings.set("windowed", checked) }
 
         Label { text: "Vários monitores" }
         ComboBox {

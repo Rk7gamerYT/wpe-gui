@@ -1,0 +1,12 @@
+{
+  "KPlugin": {
+    "Id": "org.wpegui.wallpaper",
+    "Name": "Wallpaper Engine (wpe-gui)",
+    "Description": "Animated wallpaper managed by wpe-gui, with desktop icons and widgets",
+    "Version": "0.1.0",
+    "License": "MIT",
+    "Authors": [{"Name": "wpe-gui contributors"}]
+  },
+  "KPackageStructure": "Plasma/Wallpaper",
+  "X-Plasma-API-Minimum-Version": "6.0"
+}

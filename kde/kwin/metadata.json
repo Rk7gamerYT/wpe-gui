@@ -1,0 +1,13 @@
+{
+  "KPlugin": {
+    "Id": "wpe-gui",
+    "Name": "Wallpaper Engine: economia de energia",
+    "Description": "Reports covered monitors to wpe-gui",
+    "Version": "0.1.0",
+    "License": "MIT",
+    "Authors": [{"Name": "wpe-gui contributors"}]
+  },
+  "KPackageStructure": "KWin/Script",
+  "X-Plasma-API": "javascript",
+  "X-Plasma-MainScript": "code/main.js"
+}

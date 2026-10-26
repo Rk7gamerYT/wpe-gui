@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Instalador do wpe-gui: dependências, motor (linux-wallpaperengine) com os patches do projeto, ícone/menu e,
-# no GNOME, a extensão que põe o wallpaper atrás das janelas.
+# as integrações do GNOME ou KDE Plasma para a sessão atual.
 #
 #   ./install.sh               instala tudo (pede a senha do sudo só para instalar pacotes)
 #   ./install.sh --dry-run     só mostra o que faria, sem alterar nada
 #   ./install.sh --help
 #
-# Testado: Ubuntu 26.04 (GNOME 50, Wayland). As listas de Fedora e Arch vêm do README do motor e não foram
+# Testado: Ubuntu 26.04 (GNOME 50 e KDE Plasma 6, Wayland). As listas de Fedora e Arch vêm do README do motor e não foram
 # testadas pelo autor, veja docs/INSTALL.md.
 set -euo pipefail
 
@@ -14,7 +14,7 @@ ENGINE_REPO="https://github.com/Almamu/linux-wallpaperengine.git"
 # Versão do motor em que os patches foram feitos e testados
 ENGINE_REF="b016d7d1fdcf4e5fd2f9c9fa420a8aaa07fee02d"
 
-DRY=0; ASSUME_YES=0; DO_DEPS=1; DO_ENGINE=1; DO_GNOME=1
+DRY=0; ASSUME_YES=0; DO_DEPS=1; DO_ENGINE=1; DO_GNOME=1; DO_KDE=1
 HERE=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 ENGINE_DIR="${WPE_ENGINE_DIR:-$HOME/.local/share/wpe-gui/linux-wallpaperengine}"
 BIN_DIR="$HOME/.local/bin"
@@ -27,6 +27,7 @@ Opções:
   --no-deps     não instala pacotes do sistema (você já tem as dependências)
   --no-engine   não compila o motor (você já tem o linux-wallpaperengine com os patches)
   --no-gnome    não instala a extensão do GNOME
+  --no-kde      não instala o plugin Plasma e a extensão KWin
 Variáveis: WPE_ENGINE_DIR (onde clonar/compilar o motor)
 EOF
 }
@@ -38,6 +39,7 @@ for arg in "$@"; do
         --no-deps) DO_DEPS=0 ;;
         --no-engine) DO_ENGINE=0 ;;
         --no-gnome) DO_GNOME=0 ;;
+        --no-kde) DO_KDE=0 ;;
         --help|-h) usage; exit 0 ;;
         *) echo "Opção desconhecida: $arg" >&2; usage >&2; exit 2 ;;
     esac
@@ -145,6 +147,17 @@ install_app() {
     run "$HERE/wpe-gui.sh" --install-desktop
 }
 
+desktop_has() {
+    local desktop="${XDG_CURRENT_DESKTOP:-}"
+    case ":${desktop^^}:" in *":$1:"*) return 0 ;; *) return 1 ;; esac
+}
+
+install_kde() {
+    say "KDE Plasma 6 (plugin de wallpaper e extensão KWin)"
+    run "$HERE/kde/install.sh"
+    warn "Se estiver atualizando o plugin, reinicie o Plasma após sair do app: systemctl --user restart plasma-plasmashell.service"
+}
+
 install_gnome() {
     command -v gnome-shell > /dev/null 2>&1 || { echo "  GNOME Shell não encontrado: pulando a extensão."; return; }
     say "Extensão do GNOME (wallpaper atrás das janelas)"
@@ -156,7 +169,9 @@ install_gnome() {
 
 # --- main -----------------------------------------------------------------------------------------------------
 FAM=$(family)
-say "wpe-gui: instalação  (distro: $FAM${DRY:+, simulação})"
+MODE_LABEL=""
+[ "$DRY" = 1 ] && MODE_LABEL=", simulação"
+say "wpe-gui: instalação  (distro: $FAM$MODE_LABEL)"
 [ "$DRY" = 1 ] && echo "Modo --dry-run: nada será alterado."
 
 if [ "$DO_DEPS" = 1 ] && [ "$FAM" = unknown ]; then
@@ -170,7 +185,13 @@ fi
 [ "$DO_DEPS" = 1 ] && install_packages "$FAM"
 [ "$DO_ENGINE" = 1 ] && build_engine
 install_app
-[ "$DO_GNOME" = 1 ] && install_gnome
+if desktop_has KDE; then
+    [ "$DO_KDE" = 0 ] || install_kde
+elif desktop_has GNOME; then
+    [ "$DO_GNOME" = 0 ] || install_gnome
+else
+    echo "  Sessão sem GNOME/KDE detectado. Consulte docs/INSTALL.md para instalar a integração manualmente."
+fi
 
 say "Pronto"
 cat <<'EOF'

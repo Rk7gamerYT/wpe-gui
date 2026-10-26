@@ -1,8 +1,7 @@
 """Power saving: pause the wallpaper on monitors that have a maximized or fullscreen app.
 
-GNOME doesn't let ordinary programs see other windows, so the GNOME Shell extension (extension/) watches them and
-publishes, over D-Bus, the monitors that are covered. Without the extension nothing is ever reported covered and
-nothing is paused.
+The GNOME Shell extension (extension/) or KWin script (kde/kwin/) reports
+covered monitors over D-Bus. Without the desktop integration, no monitors are paused.
 """
 
 import json
@@ -14,6 +13,7 @@ from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusServiceWatcher
 from PySide6.QtGui import QGuiApplication
 
 from .engine import SPAN
+from .kde import is_kde, KWinBridge
 
 SERVICE = "org.wpegui.Background"
 PATH = "/org/wpegui/Background"
@@ -40,6 +40,7 @@ class PowerSaver(QObject):
         settings.changed.connect(self.update)
         engine.activeChanged.connect(self.update)
         self._fetch()
+        self._kwin = KWinBridge(self) if is_kde() and QGuiApplication.instance() else None
 
     def _fetch(self):
         reply = QDBusInterface(SERVICE, PATH, SERVICE, QDBusConnection.sessionBus()).call("GetCovered")

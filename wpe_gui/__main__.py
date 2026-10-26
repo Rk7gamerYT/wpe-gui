@@ -8,6 +8,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon  # the tray needs the widgets application
 
 from .engine import Engine
+from .kde import native_wayland, PlasmaDesktop
 from .properties import PropertiesStore
 from .powersaver import PowerSaver
 from .staticbackground import StaticBackground
@@ -53,6 +54,7 @@ def main() -> int:
     login_background.message.connect(engine.message.emit)
     properties.changed.connect(engine.propertiesChanged)
     powersaver = PowerSaver(settings, engine)  # noqa: F841 (kept alive by the local reference)
+    engine.plasma_desktop = PlasmaDesktop(settings, engine) if native_wayland() else None
     static_background = StaticBackground(settings, engine)
     window_hider = WindowHider(engine)  # noqa: F841 (kept alive by the local reference)
     model = WallpaperModel(settings)
