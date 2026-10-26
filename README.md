@@ -96,6 +96,9 @@ Instale o plugin de wallpaper do Plasma e a extensão do KWin, sem sudo:
 O app usa automaticamente o modo Wayland nativo no KDE, mesmo se o modo janela
 ficou salvo de uma sessão GNOME. O plugin **Wallpaper Engine (wpe-gui)** mantém
 o desktop transparente sobre a animação, preservando os ícones, widgets e painéis.
+No botão direito da área de trabalho, **Mostrar ícones da área de trabalho**
+alterna os ícones daquele monitor, sem apagar arquivos ou alterar suas posições.
+A escolha fica salva mesmo após sair do app.
 Ao parar ou sair do app, mostra a última imagem estática capturada por monitor.
 A opção **Restaurar o fundo de antes** devolve o plugin e a imagem anteriores do Plasma.
 Para o fundo estático, mantenha essa opção habilitada e aguarde a captura inicial.

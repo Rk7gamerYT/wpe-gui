@@ -113,6 +113,16 @@ use **Sair** no menu da bandeja. Com **Fundo estático ao fechar o app** habilit
 aguarde a captura inicial: ao parar o motor, a última imagem capturada fica no desktop.
 O fundo estático não é uma captura contínua do último quadro da animação.
 
+## Mostrar ou ocultar os ícones
+
+Clique com o botão direito numa parte vazia da área de trabalho e alterne
+**Mostrar ícones da área de trabalho**. A opção aparece com o plugin
+**Wallpaper Engine (wpe-gui)** ativo e vale para o monitor em que você abriu o menu.
+
+Ela apenas oculta a camada de ícones: os arquivos, suas posições, widgets, painel
+e wallpaper são preservados. A escolha fica salva após reiniciar o Plasma ou sair
+do app. Marque novamente a opção para os ícones voltarem.
+
 ## Verificar a integração
 
 Com o app aberto, no Konsole:
