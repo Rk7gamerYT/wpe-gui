@@ -64,6 +64,11 @@ class Tray(QObject):
         menu.addAction(self._open)
         menu.addAction(self._hide)
         menu.addSeparator()
+        self._pause = QAction("Pausar todos", menu)
+        self._pause.triggered.connect(lambda: engine.setGlobalPaused(not engine.hasManualPause))
+        menu.addAction(self._pause)
+        self._monitor_pauses = menu.addMenu("Pausar por monitor")
+        self._monitor_pauses.aboutToShow.connect(self._refresh_monitor_pauses)
         menu.addAction(self._restore)
         menu.addAction(self._stop)
         menu.addSeparator()
@@ -71,8 +76,8 @@ class Tray(QObject):
         self._menu = menu  # keep a reference, the tray doesn't own it
         self.icon.setContextMenu(menu)
         self.icon.activated.connect(self._activated)
-        engine.activeChanged.connect(lambda: self._stop.setEnabled(engine.running))
-        self._stop.setEnabled(engine.running)
+        engine.activeChanged.connect(self._refresh_playback)
+        self._refresh_playback()
 
         # Open only makes sense while the window is hidden, Hide only while it is shown
         menu.aboutToShow.connect(self._refresh_menu)
@@ -93,6 +98,23 @@ class Tray(QObject):
         shown = self._window.isVisible()
         self._open.setEnabled(not shown)
         self._hide.setEnabled(shown)
+
+    def _refresh_playback(self):
+        self._stop.setEnabled(self._engine.running)
+        self._pause.setEnabled(self._engine.running)
+        self._pause.setText("Retomar todos" if self._engine.hasManualPause else "Pausar todos")
+        self._monitor_pauses.setEnabled(self._engine.running)
+
+    def _refresh_monitor_pauses(self):
+        self._monitor_pauses.clear()
+        for target in self._engine.playbackTargets:
+            label = target["label"]
+            if target["paused"] and not target["manuallyPaused"]:
+                label += " (pausa automática)"
+            action = self._monitor_pauses.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(target["manuallyPaused"])
+            action.triggered.connect(lambda checked, key=target["key"]: self._engine.setTargetPaused(key, checked))
 
     @property
     def available(self) -> bool:

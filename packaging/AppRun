@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+app_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export WPE_BUNDLED_ENGINE="$app_dir/usr/lib/wpe-engine/linux-wallpaperengine"
+export WPE_BUNDLE_ROOT="$app_dir/usr/app"
+# Avoid PYTHONHOME/LD_LIBRARY_PATH leaking into desktop helpers launched by the app.
+unset PYTHONHOME PYTHONPATH
+exec "$app_dir/usr/python/bin/python3" -s "$app_dir/usr/app/packaging/launcher.py" "$@"

@@ -1,5 +1,19 @@
 # wpe-gui
 
+## Download do pacote completo
+
+Baixe o **AppImage x86_64** em [Releases](https://github.com/Rk7gamerYT/wpe-gui/releases/latest).
+Um único arquivo inclui a interface, Python, Qt, o motor corrigido e suas bibliotecas.
+Permita a execução do arquivo e abra-o. Não é preciso instalar dependências ou compilar.
+Requer glibc 2.39+ (Ubuntu 24.04+, Debian 13 e distros atuais) e drivers gráficos do desktop.
+Os wallpapers/assets comerciais continuam vindo do Wallpaper Engine instalado pelo Steam.
+
+O atualizador fica em **Configurações → Atualizações** e verifica o SHA-256 antes de
+substituir o AppImage. No KDE, o plugin e a extensão KWin já estão dentro do pacote.
+
+As instruções abaixo para compilação são destinadas ao desenvolvimento/instalação pelo código-fonte.
+
+
 Interface gráfica (Qt6/QML) para o [linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine), com layout inspirado no Wallpaper Engine do Windows: grade de wallpapers, painel de preview à direita e página de configurações.
 
 > Este projeto **não** inclui o motor nem os wallpapers. Você precisa do `linux-wallpaperengine` instalado e de uma cópia do Wallpaper Engine na Steam.
@@ -141,3 +155,15 @@ WPE_WALLPAPER=/caminho/workshop/content/431960/<id> WPE_ASSETS=/caminho/wallpape
 ## Licença
 
 MIT. Qualquer pessoa (inclusive os criadores do Wallpaper Engine) pode usar, modificar e redistribuir o código livremente. O motor linux-wallpaperengine é um programa separado, executado como processo externo, com a licença própria dele.
+
+### Áudio por wallpaper
+
+Cada wallpaper permite ajustar seu volume e escolher entre som ligado, silenciado ou o
+padrão global do app. Wallpapers diferentes podem tocar em cada monitor; cópias do mesmo wallpaper compartilham uma única fonte de áudio. Os patches de SceneScript
+e de espectro estão descritos em [Áudio dos wallpapers](docs/AUDIO.md).
+
+A base do fork e os testes de compatibilidade estão em
+[SceneScript](docs/SCENESCRIPT.md), com uma auditoria dos wallpapers instalados.
+
+A barra inferior e o menu da bandeja também oferecem pausa global e por monitor,
+independente das pausas automáticas do modo economia.

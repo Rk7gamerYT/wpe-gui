@@ -118,14 +118,15 @@ def audio_responsive(folder: str) -> bool:
         return False
     if data.get("general", {}).get("supportsaudioprocessing"):
         return True
-    needle = b"g_AudioSpectrum"
+    needles = (b"g_AudioSpectrum", b"registerAudioBuffers", b"audioprocessingmode")
+    overlap = max(map(len, needles)) - 1
     try:
         with open(root / "scene.pkg", "rb") as f:
             tail = b""
             while chunk := f.read(8 << 20):
-                if needle in tail + chunk:
+                if any(needle in tail + chunk for needle in needles):
                     return True
-                tail = chunk[-len(needle):]
+                tail = chunk[-overlap:]
     except OSError:
         pass
     return False

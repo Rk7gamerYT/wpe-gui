@@ -1,0 +1,187 @@
+{
+  "date": "2026-10-28",
+  "scope": "19 cenas instaladas que usam engine.registerAudioBuffers; teste X11/llvmpipe em Xvfb, sem modificar os wallpapers",
+  "limits": "Screenshot e ausência de erros não comprovam fidelidade visual ou todas as interações. As falhas de renderização restantes estão registradas.",
+  "summary": {
+    "tested": 19,
+    "rendered": 17,
+    "no_recorded_errors": 10,
+    "aborted_or_segfaulted": 0
+  },
+  "wallpapers": [
+    {
+      "id": "2067939514",
+      "title": "Windows Visualizer",
+      "rendered": true,
+      "exit": 0,
+      "errors": []
+    },
+    {
+      "id": "2379653269",
+      "title": "Neir Automata - 2B",
+      "rendered": true,
+      "exit": 0,
+      "errors": [
+        "Cannot parse parameter metadata for u_userSpeed in shader workshop/2114826643/effects/shift_hue: [json.exception.parse_error.101] parse error at line 1, column 46: syntax error while parsing array - unexpected number literal; expected ']'"
+      ]
+    },
+    {
+      "id": "2583870234",
+      "title": "Baal, Raiden Shogun - Genshin Impact",
+      "rendered": true,
+      "exit": 0,
+      "errors": []
+    },
+    {
+      "id": "2637057991",
+      "title": "Eve",
+      "rendered": true,
+      "exit": 0,
+      "errors": [
+        "Light objects are not supported yet"
+      ]
+    },
+    {
+      "id": "2936581667",
+      "title": "Maxwell (audio response)",
+      "rendered": true,
+      "exit": 0,
+      "errors": []
+    },
+    {
+      "id": "3019668141",
+      "title": "Arlecchino - Genshin Impact",
+      "rendered": true,
+      "exit": 0,
+      "errors": []
+    },
+    {
+      "id": "3131188303",
+      "title": "Nier Automata 2B",
+      "rendered": true,
+      "exit": 0,
+      "errors": []
+    },
+    {
+      "id": "3150653756",
+      "title": "Arlecchino [Crimson]",
+      "rendered": true,
+      "exit": 0,
+      "errors": [
+        "ScriptEngine [applyUserProperties]: TypeError: cannot read property 'multiply' of undefined",
+        "ScriptEngine [property init]: TypeError: not a function",
+        "ScriptEngine [property update]: TypeError: Invalid module function arguments",
+        "ScriptEngine [property update]: TypeError: not a function",
+        "ScriptEngine [property update]: TypeError: cannot read property 'getFrame' of undefined"
+      ]
+    },
+    {
+      "id": "3208566929",
+      "title": "Chiori",
+      "rendered": true,
+      "exit": 0,
+      "errors": []
+    },
+    {
+      "id": "3232006554",
+      "title": "【4K | 眼睛变色】仆人阿蕾奇诺——两把刷子zZ【原神】Genshin Impact Arlecchino❤",
+      "rendered": true,
+      "exit": 0,
+      "errors": []
+    },
+    {
+      "id": "3276166653",
+      "title": "Chiori",
+      "rendered": true,
+      "exit": 0,
+      "errors": []
+    },
+    {
+      "id": "3319542538",
+      "title": "House of dreams.",
+      "rendered": true,
+      "exit": 0,
+      "errors": [
+        "VolumeLight objects are not supported yet",
+        "ScriptEngine [property init]: TypeError: not a function",
+        "ScriptEngine [property update]: TypeError: cannot read property 'origin' of undefined",
+        "ScriptEngine [property update]: TypeError: cannot read property 'x' of undefined",
+        "ScriptEngine [property update]: TypeError: cannot read property 'scale' of undefined",
+        "ScriptEngine [property update]: TypeError: cannot read property 'multiply' of undefined"
+      ]
+    },
+    {
+      "id": "3359032591",
+      "title": "Chosen of the Wolf Katarina (Adjustable; 4k)",
+      "rendered": true,
+      "exit": 0,
+      "errors": [
+        "Failed to setup object 911: 0:81(2): error: initializer of type vec4 cannot be assigned to variable of type vec2",
+        "ScriptEngine [property init]: TypeError: not a function",
+        "ScriptEngine [property update]: TypeError: cannot read property 'origin' of undefined",
+        "ScriptEngine [property update]: TypeError: cannot read property 'x' of undefined",
+        "ScriptEngine [property update]: TypeError: cannot read property 'scale' of undefined",
+        "ScriptEngine [property update]: TypeError: cannot read property 'multiply' of undefined",
+        "Cannot parse combo metadata in shader workshop/2924967132/effects/procedural_noise: [json.exception.parse_error.101] parse error at line 1, column 92: syntax error while parsing object key - invalid literal; last read: '\"options\":{C'; expected string",
+        "Cannot parse combo metadata in shader workshop/2924967132/effects/procedural_noise: [json.exception.parse_error.101] parse error at line 1, column 92: syntax error while parsing object key - invalid literal; last read: '\"options\":{N'; expected string"
+      ]
+    },
+    {
+      "id": "3385540784",
+      "title": "Alone. and Sad.",
+      "rendered": true,
+      "exit": 0,
+      "errors": [
+        "ScriptEngine [property init]: TypeError: not a function",
+        "ScriptEngine [property update]: TypeError: cannot read property 'origin' of undefined",
+        "ScriptEngine [property update]: TypeError: cannot read property 'x' of undefined",
+        "ScriptEngine [property update]: TypeError: cannot read property 'scale' of undefined",
+        "ScriptEngine [property update]: TypeError: cannot read property 'multiply' of undefined"
+      ]
+    },
+    {
+      "id": "3420277613",
+      "title": "Hatsune Miku | GLITCHED HOLOGRAM",
+      "rendered": true,
+      "exit": 0,
+      "errors": [
+        "Failed to setup object 67: Could not find where to place includes for shader unit commands/copy",
+        "Failed to setup object 69: Could not find where to place includes for shader unit commands/copy"
+      ]
+    },
+    {
+      "id": "3460626949",
+      "title": "HUD",
+      "rendered": true,
+      "exit": 0,
+      "errors": []
+    },
+    {
+      "id": "3471294034",
+      "title": "麻匪 巳 UnclePanda [3大UI布局切换]",
+      "rendered": false,
+      "exit": 1,
+      "errors": [
+        "Light objects are not supported yet",
+        "Framebuffers are not properly set"
+      ]
+    },
+    {
+      "id": "3562242774",
+      "title": "Arlecchino | (Genshin)",
+      "rendered": true,
+      "exit": 0,
+      "errors": []
+    },
+    {
+      "id": "3599498791",
+      "title": "麻匪 Dock2 多组件交互壁纸 Component module",
+      "rendered": false,
+      "exit": 1,
+      "errors": [
+        "VolumeLight objects are not supported yet",
+        "[json.exception.type_error.302] type must be string, but is object"
+      ]
+    }
+  ]
+}

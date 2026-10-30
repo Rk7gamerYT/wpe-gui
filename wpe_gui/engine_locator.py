@@ -5,6 +5,9 @@ from pathlib import Path
 
 
 def locate_engine(custom=""):
+    bundled = os.environ.get("WPE_BUNDLED_ENGINE", "")
+    if bundled and Path(bundled).is_file() and os.access(bundled, os.X_OK):
+        return bundled
     if custom:
         path = Path(custom).expanduser()
         return str(path) if path.is_file() and os.access(path, os.X_OK) else shutil.which(custom)

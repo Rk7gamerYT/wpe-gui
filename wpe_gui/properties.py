@@ -171,8 +171,9 @@ class PropertiesStore(QObject):
     # -- per-wallpaper engine options (scaling, clamping), stored beside the property overrides ------
 
     ENGINE_KEY = "_engine"
-    ENGINE_CHOICES = {"scaling": ("default", "stretch", "fit", "fill"), "clamping": ("clamp", "border", "repeat")}
-    ENGINE_NUMERIC = {"audioGain": (0.0, 4.0)}  # audio reaction intensity, 1.0 = unchanged
+    ENGINE_CHOICES = {"scaling": ("default", "stretch", "fit", "fill"), "clamping": ("clamp", "border", "repeat"),
+                      "sound": ("enabled", "muted")}
+    ENGINE_NUMERIC = {"audioGain": (0.0, 4.0), "volume": (0.0, 100.0)}
 
     @Slot(str, result=bool)
     def audioResponsive(self, folder):

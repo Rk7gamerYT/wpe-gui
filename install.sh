@@ -51,48 +51,7 @@ die()  { printf '\033[31merro:\033[0m %s\n' "$*" >&2; exit 1; }
 run()  { if [ "$DRY" = 1 ]; then printf '  + %s\n' "$*"; else "$@"; fi; }
 
 # --- distro ---------------------------------------------------------------------------------------------------
-family() {
-    local id="" like=""
-    if [ -r /etc/os-release ]; then . /etc/os-release; id="${ID:-}"; like="${ID_LIKE:-}"; fi
-    case " $id $like " in
-        *" ubuntu "*|*" debian "*|*" linuxmint "*|*" pop "*) echo debian ;;
-        *" fedora "*|*" rhel "*|*" centos "*) echo fedora ;;
-        *" arch "*|*" manjaro "*|*" endeavouros "*|*" cachyos "*) echo arch ;;
-        *) echo unknown ;;
-    esac
-}
-
-packages() {
-    case "$1" in
-        debian)
-            local mpv=libmpv2
-            apt-cache show libmpv2 > /dev/null 2>&1 || mpv=libmpv1
-            echo build-essential cmake git pkg-config libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev \
-                libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev \
-                libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv "$mpv" libpulse-dev libpulse0 \
-                libfftw3-dev libfreetype-dev libwayland-dev wayland-protocols libxkbcommon-dev \
-                python3 python3-venv python3-pip ffmpeg x11-utils ;;
-        fedora)
-            echo gcc gcc-c++ cmake git libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel \
-                glew-devel freeglut-devel SDL2-devel lz4-devel ffmpeg ffmpeg-free-devel libXxf86vm-devel glm-devel \
-                glfw-devel mpv mpv-devel pulseaudio-libs-devel fftw-devel gmp-devel freetype-devel wayland-devel \
-                wayland-protocols-devel libxkbcommon-devel python3 python3-pip xorg-x11-utils ;;
-        arch)
-            echo base-devel cmake git libxrandr libxinerama libxcursor libxi mesa glew freeglut sdl2 lz4 ffmpeg \
-                libxxf86vm glm glfw mpv libpulse fftw freetype2 wayland wayland-protocols libxkbcommon python \
-                python-pip xorg-xprop xorg-xwininfo ;;
-    esac
-}
-
-install_packages() {
-    local fam=$1; local -a pkgs; read -r -a pkgs <<< "$(packages "$fam")"
-    say "Pacotes do sistema (${#pkgs[@]}) para $fam"
-    case "$fam" in
-        debian) run sudo apt-get update; run sudo apt-get install -y "${pkgs[@]}" ;;
-        fedora) run sudo dnf install -y "${pkgs[@]}" ;;
-        arch)   run sudo pacman -S --needed --noconfirm "${pkgs[@]}" ;;
-    esac
-}
+source "$HERE/scripts/distro-packages.sh"
 
 # --- motor ----------------------------------------------------------------------------------------------------
 # Compiling C++ in parallel needs roughly 2 GB per job: more jobs than the memory allows can freeze the machine

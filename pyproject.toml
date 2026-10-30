@@ -1,6 +1,6 @@
 [project]
 name = "wpe-gui"
-version = "0.1.0"
+version = "0.2.0"
 description = "Interface Qt/QML no estilo Windows para o linux-wallpaperengine"
 readme = "README.md"
 license = { text = "MIT" }

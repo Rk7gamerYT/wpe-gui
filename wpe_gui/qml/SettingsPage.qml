@@ -19,6 +19,25 @@ ScrollView {
         columnSpacing: 16
         rowSpacing: 14
 
+        Label { text: "Versão do app" }
+        Label { text: updater.currentVersion + (updater.packaged ? " · pacote completo" : " · código-fonte") }
+        Label { text: "Atualizações" }
+        RowLayout {
+            Button { text: "Verificar"; enabled: !updater.busy; onClicked: updater.check() }
+            Button {
+                visible: updater.available && updater.packaged && !updater.ready
+                text: "Atualizar agora"; enabled: !updater.busy
+                onClicked: updater.download()
+            }
+            Button { visible: updater.ready; text: "Reiniciar app"; onClicked: updater.restart() }
+            Button { visible: !updater.packaged; text: "Baixar pacote completo"; onClicked: updater.openReleases() }
+        }
+        Label {
+            Layout.columnSpan: 2; Layout.fillWidth: true
+            text: updater.status; visible: text !== ""; wrapMode: Text.Wrap
+        }
+        ProgressBar { Layout.columnSpan: 2; Layout.fillWidth: true; visible: updater.busy; value: updater.progress }
+
         Label { text: "Caminho do linux-wallpaperengine" }
         TextField {
             Layout.fillWidth: true

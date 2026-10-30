@@ -16,9 +16,6 @@ class ProcessEngine(Engine):
     def build_args(self, *args, **kwargs):
         return ["-c", self.script]
 
-    def _audible_key(self, keys):
-        return next(iter(keys), None)
-
 
 class RecoveryTests(unittest.TestCase):
     @classmethod

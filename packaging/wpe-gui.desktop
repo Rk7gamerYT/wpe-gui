@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Wallpaper Engine
+Exec=AppRun
+Icon=wpe-gui
+Categories=Utility;
+Terminal=false
+StartupWMClass=wpe-gui

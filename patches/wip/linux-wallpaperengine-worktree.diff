@@ -1,0 +1,2293 @@
+diff --git a/src/WallpaperEngine/Application/ApplicationContext.cpp b/src/WallpaperEngine/Application/ApplicationContext.cpp
+index 510ec95..3f80c63 100644
+--- a/src/WallpaperEngine/Application/ApplicationContext.cpp
++++ b/src/WallpaperEngine/Application/ApplicationContext.cpp
+@@ -1,6 +1,7 @@
+ #include "ApplicationContext.h"
+ 
+ #include "Steam/FileSystem/FileSystem.h"
++#include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
+ #include "WallpaperEngine/Data/JSON.h"
+ #include "WallpaperEngine/Logging/Log.h"
+ 
+@@ -532,6 +533,17 @@ void ApplicationContext::loadSettingsFromArgv () {
+ 	.flag ()
+ 	.action ([this] (const std::string& value) -> void { this->settings.audio.automute = false; });
+ 
++    audioGroup.add_argument ("--audio-gain")
++	.help ("Multiplier for the audio spectrum wallpapers react to, 1.0 leaves it unchanged (0 stops the reaction)")
++	.default_value (1.0f)
++	.scan<'g', float> ()
++	.action ([] (const std::string& value) -> void {
++	    try {
++		Audio::Drivers::Recorders::PlaybackRecorder::gain = std::max (0.0f, std::stof (value));
++	    } catch (const std::exception&) {
++	    }
++	});
++
+     audioGroup.add_argument ("--no-audio-processing")
+ 	.help ("Disables audio processing for backgrounds")
+ 	.flag ()
+diff --git a/src/WallpaperEngine/Application/WallpaperApplication.cpp b/src/WallpaperEngine/Application/WallpaperApplication.cpp
+index c9107af..95bf6a4 100644
+--- a/src/WallpaperEngine/Application/WallpaperApplication.cpp
++++ b/src/WallpaperEngine/Application/WallpaperApplication.cpp
+@@ -694,7 +694,8 @@ void WallpaperApplication::setupAudio () {
+ 	}
+     );
+ 
+-    if (audioProcessingRequired && this->m_context.settings.audio.audioprocessing) {
++    if ((audioProcessingRequired || (getenv ("WPE_AUDIO_PROCESSING") && std::string (getenv ("WPE_AUDIO_PROCESSING")) == "1"))
++        && this->m_context.settings.audio.audioprocessing) {
+ 	this->m_audioRecorder
+ 	    = std::make_unique<WallpaperEngine::Audio::Drivers::Recorders::PulseAudioPlaybackRecorder> ();
+     } else {
+diff --git a/src/WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.cpp b/src/WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.cpp
+index 3d32b18..27a98ed 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.cpp
++++ b/src/WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.cpp
+@@ -2,6 +2,7 @@
+ #include "WallpaperEngine/Logging/Log.h"
+ 
+ #include <unistd.h>
++#include <cstring>
+ 
+ namespace WallpaperEngine::Audio::Drivers::Detectors {
+ void sinkInputInfoCallback (pa_context* context, const pa_sink_input_info* info, int eol, void* userdata) {
+@@ -15,6 +16,11 @@ void sinkInputInfoCallback (pa_context* context, const pa_sink_input_info* info,
+ 	return;
+     }
+ 
++    // Sibling wallpaper processes must not automute one another.
++    const char* binary = pa_proplist_gets (info->proplist, PA_PROP_APPLICATION_PROCESS_BINARY);
++    if (binary && std::strcmp (binary, "linux-wallpaperengine") == 0) return;
++    if (info->mute || info->corked) return;
++
+     // get processid
+     const char* value = pa_proplist_gets (info->proplist, PA_PROP_APPLICATION_PROCESS_ID);
+ 
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h b/src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h
+index d46b83e..e00f138 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h
+@@ -7,6 +7,9 @@ public:
+ 
+     virtual void update ();
+ 
++    /** Multiplier applied to the audio spectrum wallpapers react to (--audio-gain), 1.0 leaves it unchanged */
++    static inline float gain = 1.0f;
++
+     float audio16[16] = { 0 };
+     float audio32[32] = { 0 };
+     float audio64[64] = { 0 };
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+index 5831d4a..9373a46 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+@@ -1,4 +1,6 @@
+ #include "PulseAudioPlaybackRecorder.h"
++#include "Spectrum.h"
++#include <iterator>
+ #include "WallpaperEngine/Logging/Log.h"
+ #include <cmath>
+ #include <cstring>
+@@ -50,44 +52,18 @@ void pa_stream_read_cb (pa_stream* stream, const size_t /*nbytes*/, void* userda
+ 	    return;
+ 	}
+     } else if (currentSize > 0 && data) {
+-	const size_t dataToCopy = std::min (currentSize, WAVE_BUFFER_SIZE - recorder->currentWritePointer);
+-
+-	// depending on the amount of data available, we might want to read one or multiple frames
+-	const size_t end = recorder->currentWritePointer + dataToCopy;
+-
+-	// this packet will fill the buffer, perform some extra checks for extra full buffers and get the latest one
+-	if (end == WAVE_BUFFER_SIZE) {
+-	    if (const size_t numberOfFullBuffers = (currentSize - dataToCopy) / WAVE_BUFFER_SIZE;
+-		numberOfFullBuffers > 0) {
+-		// calculate the start of the last block (we need the end of the previous block, hence the - 1)
+-		const size_t startOfLastBuffer = std::max (
+-		    dataToCopy + (numberOfFullBuffers - 1) * WAVE_BUFFER_SIZE, currentSize - WAVE_BUFFER_SIZE
+-		);
+-		// copy directly into the final buffer
+-		memcpy (recorder->audioBuffer, &data[startOfLastBuffer], WAVE_BUFFER_SIZE * sizeof (uint8_t));
+-		// copy whatever is left to the read/write buffer
+-		recorder->currentWritePointer = currentSize - startOfLastBuffer - WAVE_BUFFER_SIZE;
+-		memcpy (
+-		    recorder->audioBufferTmp, &data[startOfLastBuffer + WAVE_BUFFER_SIZE],
+-		    recorder->currentWritePointer * sizeof (uint8_t)
+-		);
+-	    } else {
+-		// okay, no full extra packets available, copy the rest of the data and flip the buffers
+-		memcpy (&recorder->audioBufferTmp[recorder->currentWritePointer], data, dataToCopy * sizeof (uint8_t));
+-		uint8_t* tmp = recorder->audioBuffer;
+-		recorder->audioBuffer = recorder->audioBufferTmp;
+-		recorder->audioBufferTmp = tmp;
+-		// reset write pointer
+-		recorder->currentWritePointer = 0;
+-	    }
+-
+-	    // signal a new frame is ready
+-	    recorder->fullFrameReady = true;
+-	} else {
+-	    // copy over available data to the tmp buffer and everything should be set
+-	    memcpy (&recorder->audioBufferTmp[recorder->currentWritePointer], data, dataToCopy * sizeof (uint8_t));
+-	    recorder->currentWritePointer += dataToCopy;
+-	}
++        size_t offset = 0;
++        while (offset < currentSize) {
++            const size_t count = std::min (currentSize - offset, WAVE_BUFFER_SIZE - recorder->currentWritePointer);
++            memcpy (recorder->audioBufferTmp + recorder->currentWritePointer, data + offset, count);
++            recorder->currentWritePointer += count;
++            offset += count;
++            if (recorder->currentWritePointer == WAVE_BUFFER_SIZE) {
++                std::swap (recorder->audioBuffer, recorder->audioBufferTmp);
++                recorder->currentWritePointer = 0;
++                recorder->fullFrameReady = true;
++            }
++        }
+     }
+ 
+     if (pa_stream_drop (stream) != 0) {
+@@ -102,12 +78,22 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
+ 
+     auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
+ 
++    if (!info->default_sink_name) return;
++    std::string monitor_name (info->default_sink_name);
++    monitor_name += ".monitor";
++    if (recorder->captureStream && recorder->monitorName == monitor_name
++        && pa_stream_get_state (recorder->captureStream) != PA_STREAM_FAILED) return;
++    recorder->monitorName = monitor_name;
++    recorder->currentWritePointer = 0;
++    recorder->fullFrameReady = false;
++
+     pa_sample_spec spec;
+     spec.format = PA_SAMPLE_U8;
+     spec.rate = 44100;
+     spec.channels = 1;
+ 
+     if (recorder->captureStream) {
++        pa_stream_disconnect (recorder->captureStream);
+ 	pa_stream_unref (recorder->captureStream);
+     }
+ 
+@@ -116,16 +102,13 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
+     pa_stream_set_state_callback (recorder->captureStream, &pa_stream_notify_cb, userdata);
+     pa_stream_set_read_callback (recorder->captureStream, &pa_stream_read_cb, userdata);
+ 
+-    std::string monitor_name (info->default_sink_name);
+-    monitor_name += ".monitor";
+-
+     // setup latency
+     pa_buffer_attr attr {};
+ 
+     // 10 = latency msecs, 750 = max msecs to store
+     size_t bytesPerSec = pa_bytes_per_second (&spec);
+-    attr.fragsize = bytesPerSec * 10 / 100;
+-    attr.maxlength = attr.fragsize + bytesPerSec * 750 / 100;
++    attr.fragsize = bytesPerSec * 10 / 1000;
++    attr.maxlength = attr.fragsize + bytesPerSec * 750 / 1000;
+ 
+     if (pa_stream_connect_record (recorder->captureStream, monitor_name.c_str (), &attr, PA_STREAM_ADJUST_LATENCY)
+ 	!= 0) {
+@@ -212,7 +195,7 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
+ }
+ 
+ void PulseAudioPlaybackRecorder::update () {
+-    pa_mainloop_iterate (this->m_mainloop, 0, nullptr);
++    for (int i = 0; i < 8 && pa_mainloop_iterate (this->m_mainloop, 0, nullptr) > 0; ++i) { }
+ 
+     // interpolate current values to the destination
+     for (int i = 0; i < 64; i++) {
+@@ -233,33 +216,36 @@ void PulseAudioPlaybackRecorder::update () {
+ 
+     this->m_captureData.fullFrameReady = false;
+ 
+-    // convert audio data to deltas so the fft library can properly handle it
++    // Remove DC and apply a Hann window to reduce leakage between frequency bands.
++    float mean = 0.0f;
++    for (int i = 0; i < WAVE_BUFFER_SIZE; ++i) mean += this->m_captureData.audioBuffer[i];
++    mean /= WAVE_BUFFER_SIZE;
+     for (int i = 0; i < WAVE_BUFFER_SIZE; i++) {
+-	this->m_audioFFTbuffer[i] = (this->m_captureData.audioBuffer[i] - 128) / 128.0f;
++        const float window = 0.5f * (1.0f - std::cos (2.0f * M_PI * i / WAVE_BUFFER_SIZE));
++        this->m_audioFFTbuffer[i] = (this->m_captureData.audioBuffer[i] - mean) / 128.0f * window;
+     }
+ 
+     // perform full fft pass
+     kiss_fftr (this->m_captureData.kisscfg, this->m_audioFFTbuffer, this->m_FFTinfo);
+ 
+-    // now reduce to the different bands
+-    // use just one for loop to produce all 3
++    float powers[64];
++    spectrumPowers (this->m_FFTinfo, WAVE_BUFFER_SIZE, 44100.0f, powers);
++    std::fill (std::begin (this->m_FFTdestination32), std::end (this->m_FFTdestination32), 0.0f);
++    std::fill (std::begin (this->m_FFTdestination16), std::end (this->m_FFTdestination16), 0.0f);
++    // Normalize -60..0 dBFS, apply gain, then pool adjacent bands without losing peaks.
+     for (int band = 0; band < 64; band++) {
+-	int index = band * 2;
+-	float f1 = this->m_FFTinfo[index].r;
+-	float f2 = this->m_FFTinfo[index].i;
+-	f2 = f1 * f1 + f2 * f2; // magnitude
++	float f1;
++	float f2 = std::max (1.0f, powers[band] * 1000000.0f);
+ 	f1 = 0.0f;
+ 
+ 	if (f2 > 0.0f) {
+-	    f1 = 0.35f * log10 (f2);
++	    f1 = 0.35f * log10 (f2) * PlaybackRecorder::gain;
+ 	}
+ 
+ 	this->m_FFTdestination64[band]
+-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f)));
+-	this->m_FFTdestination32[band >> 1]
+-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 31.0f) * 1.0f - 0.5f)));
+-	this->m_FFTdestination16[band >> 2]
+-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 15.0f) * 1.0f - 0.5f)));
++            = std::clamp (f1 / 2.1f, 0.0f, 1.0f);
++        this->m_FFTdestination32[band >> 1] = std::max (this->m_FFTdestination32[band >> 1], this->m_FFTdestination64[band]);
++        this->m_FFTdestination16[band >> 2] = std::max (this->m_FFTdestination16[band >> 2], this->m_FFTdestination64[band]);
+     }
+ }
+ 
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+index ac6c034..24f5c34 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+@@ -3,8 +3,9 @@
+ #include "PlaybackRecorder.h"
+ #include "kiss_fftr.h"
+ #include <pulse/pulseaudio.h>
++#include <string>
+ 
+-#define WAVE_BUFFER_SIZE 1024
++#define WAVE_BUFFER_SIZE 4096
+ 
+ namespace WallpaperEngine::Audio::Drivers::Recorders {
+ class PlaybackRecorder;
+@@ -21,6 +22,7 @@ public:
+ 	size_t currentWritePointer;
+ 	bool fullFrameReady;
+ 	pa_stream* captureStream;
++        std::string monitorName;
+     };
+ 
+     PulseAudioPlaybackRecorder ();
+diff --git a/src/WallpaperEngine/Data/JSON.h b/src/WallpaperEngine/Data/JSON.h
+index 7d99883..feaf7d9 100644
+--- a/src/WallpaperEngine/Data/JSON.h
++++ b/src/WallpaperEngine/Data/JSON.h
+@@ -68,7 +68,7 @@ public:
+ 
+ 	return (*it);
+     }
+-    [[nodiscard]] std::optional<base_type> optional (const std::string& key) const noexcept {
++    [[nodiscard]] std::optional<base_type> optional (const std::string& key) const {
+ 	auto base = this->base ();
+ 	const auto it = base.find (key);
+ 	auto result = std::optional<base_type> {};
+@@ -79,7 +79,7 @@ public:
+ 
+ 	return result;
+     }
+-    template <typename T> [[nodiscard]] std::optional<T> optional (const std::string& key) const noexcept {
++    template <typename T> [[nodiscard]] std::optional<T> optional (const std::string& key) const {
+ 	auto base = this->base ();
+ 	const auto it = base.find (key);
+ 
+@@ -89,7 +89,7 @@ public:
+ 
+ 	return *it;
+     }
+-    template <typename T> [[nodiscard]] T optional (const std::string& key, T defaultValue) const noexcept {
++    template <typename T> [[nodiscard]] T optional (const std::string& key, T defaultValue) const {
+ 	auto base = this->base ();
+ 	const auto it = base.find (key);
+ 
+diff --git a/src/WallpaperEngine/Data/Model/Object.h b/src/WallpaperEngine/Data/Model/Object.h
+index c346aab..14f9c68 100644
+--- a/src/WallpaperEngine/Data/Model/Object.h
++++ b/src/WallpaperEngine/Data/Model/Object.h
+@@ -611,7 +611,7 @@ struct TextData {
+     /** Vertical alignment: "top", "center", "bottom" */
+     std::string verticalalign;
+     /** Padding inside the bounding box */
+-    int padding;
++    glm::vec2 padding;
+     // TODO: PARSE LIMITS TOO!
+ };
+ 
+diff --git a/src/WallpaperEngine/Data/Parsers/ObjectParser.cpp b/src/WallpaperEngine/Data/Parsers/ObjectParser.cpp
+index 4e35f5a..9e551f3 100644
+--- a/src/WallpaperEngine/Data/Parsers/ObjectParser.cpp
++++ b/src/WallpaperEngine/Data/Parsers/ObjectParser.cpp
+@@ -78,12 +78,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
+     } else if (shapeIt != it.end ()) {
+ 	sLog.error ("VolumeLight objects are not supported yet");
+     } else {
+-	if (!it.optional ("solid", false)) {
+-	    // dump the object for now, might want to change later
+-	    // TODO: RE-EVALUATE IF THIS MAKES SENSE, THERE'S OBJECTS THAT CONTAIN OTHER OBJECTS AND THUS AREN'T REALLY
+-	    // ANYTHING SPECIAL
+-	    sLog.error ("Unknown object type found: ", it.dump ());
+-	}
++        sLog.debug ("Non-rendering scene group: ", basedata.name);
+     }
+ 
+     return std::make_unique<Object> (std::move (basedata));
+@@ -123,6 +118,11 @@ SoundUniquePtr ObjectParser::parseSound (const JSON& it, ObjectData base) {
+ }
+ 
+ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, ObjectData base) {
++    glm::vec2 padding (0.0f);
++    if (auto field = it.optional ("padding")) {
++        if (field->is_number ()) padding = glm::vec2 (field->get<float> ());
++        else padding = Builders::VectorBuilder::parse<glm::vec2> (field->get<std::string> ());
++    }
+     return std::make_unique<Text> (
+ 	std::move (base),
+ 	TextData {
+@@ -136,7 +136,7 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
+ 	    .visible = it.user ("visible", project.properties, true),
+ 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
+ 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
+-	    .padding = it.optional ("padding", 0),
++	    .padding = padding,
+ 	}
+     );
+ }
+diff --git a/src/WallpaperEngine/Data/Parsers/WallpaperParser.cpp b/src/WallpaperEngine/Data/Parsers/WallpaperParser.cpp
+index c108a0d..fe71e4e 100644
+--- a/src/WallpaperEngine/Data/Parsers/WallpaperParser.cpp
++++ b/src/WallpaperEngine/Data/Parsers/WallpaperParser.cpp
+@@ -35,7 +35,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project)
+ 
+     return std::make_unique <Scene> (
+         WallpaperData {
+-            .filename = "",
++            .filename = file.get<std::string> (),
+             .project = project
+         }, SceneData {
+             .colors = {
+diff --git a/src/WallpaperEngine/Render/Objects/CImage.cpp b/src/WallpaperEngine/Render/Objects/CImage.cpp
+index be0baca..231f4fc 100644
+--- a/src/WallpaperEngine/Render/Objects/CImage.cpp
++++ b/src/WallpaperEngine/Render/Objects/CImage.cpp
+@@ -174,6 +174,8 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
+     m_modelViewProjectionPass (glm::mat4 (1.0)), m_modelViewProjectionCopy (), m_modelViewProjectionScreenInverse (),
+     m_modelViewProjectionPassInverse (glm::inverse (m_modelViewProjectionPass)), m_modelViewProjectionCopyInverse (),
+     m_modelMatrix (), m_viewProjectionMatrix (), m_image (image), m_pos (), m_initialized (false) {
++    this->m_scriptAlignment.update (image.alignment, DynamicValue::Initialization);
++    this->registerProperty ("alignment", this->m_scriptAlignment);
+     // register any properties in use on this object
+     this->registerProperty ("origin", *image.origin->value);
+     this->registerProperty ("scale", *image.scale->value);
+@@ -230,6 +232,8 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
+ 	// TODO: CHANGE ALIGNMENT TOO?
+     }
+     this->m_size = size;
++    this->m_scriptSize.update (size, DynamicValue::Initialization);
++    this->registerProperty ("size", this->m_scriptSize);
+ 
+     glm::vec2 scaledSize = size * glm::vec2 (scale);
+ 
+@@ -239,18 +243,18 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
+     this->m_pos.z = origin.x + (scaledSize.x / 2);
+     this->m_pos.y = origin.y - (scaledSize.y / 2);
+ 
+-    if (this->getImage ().alignment.find ("top") != std::string::npos) {
++    if (this->m_scriptAlignment.getString ().find ("top") != std::string::npos) {
+ 	this->m_pos.y -= scaledSize.y / 2;
+ 	this->m_pos.w -= scaledSize.y / 2;
+-    } else if (this->getImage ().alignment.find ("bottom") != std::string::npos) {
++    } else if (this->m_scriptAlignment.getString ().find ("bottom") != std::string::npos) {
+ 	this->m_pos.y += scaledSize.y / 2;
+ 	this->m_pos.w += scaledSize.y / 2;
+     }
+ 
+-    if (this->getImage ().alignment.find ("left") != std::string::npos) {
++    if (this->m_scriptAlignment.getString ().find ("left") != std::string::npos) {
+ 	this->m_pos.x += scaledSize.x / 2;
+ 	this->m_pos.z += scaledSize.x / 2;
+-    } else if (this->getImage ().alignment.find ("right") != std::string::npos) {
++    } else if (this->m_scriptAlignment.getString ().find ("right") != std::string::npos) {
+ 	this->m_pos.x -= scaledSize.x / 2;
+ 	this->m_pos.z -= scaledSize.x / 2;
+     }
+@@ -992,18 +996,18 @@ void CImage::updateScenePosition (
+     this->m_pos.z = origin.x + (scaledSize.x / 2.0f);
+     this->m_pos.y = origin.y - (scaledSize.y / 2.0f);
+ 
+-    if (this->getImage ().alignment.find ("top") != std::string::npos) {
++    if (this->m_scriptAlignment.getString ().find ("top") != std::string::npos) {
+ 	this->m_pos.y -= scaledSize.y / 2.0f;
+ 	this->m_pos.w -= scaledSize.y / 2.0f;
+-    } else if (this->getImage ().alignment.find ("bottom") != std::string::npos) {
++    } else if (this->m_scriptAlignment.getString ().find ("bottom") != std::string::npos) {
+ 	this->m_pos.y += scaledSize.y / 2.0f;
+ 	this->m_pos.w += scaledSize.y / 2.0f;
+     }
+ 
+-    if (this->getImage ().alignment.find ("left") != std::string::npos) {
++    if (this->m_scriptAlignment.getString ().find ("left") != std::string::npos) {
+ 	this->m_pos.x += scaledSize.x / 2.0f;
+ 	this->m_pos.z += scaledSize.x / 2.0f;
+-    } else if (this->getImage ().alignment.find ("right") != std::string::npos) {
++    } else if (this->m_scriptAlignment.getString ().find ("right") != std::string::npos) {
+ 	this->m_pos.x -= scaledSize.x / 2.0f;
+ 	this->m_pos.z -= scaledSize.x / 2.0f;
+     }
+@@ -1088,6 +1092,9 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
+ 
+     this->updateScenePosition (origin, size, scale, sceneWidth, sceneHeight);
+     this->uploadGeometryBuffers (size);
++    // Alignment shifts the quad, but rotation must stay anchored to the layer origin.
++    // This keeps bottom-aligned spectrum bars attached to their baseline.
++    this->m_sceneCenter = glm::vec3 (origin.x - sceneWidth / 2.0f, sceneHeight / 2.0f - origin.y, 0.0f);
+     return transform;
+ }
+ 
+@@ -1130,6 +1137,7 @@ void CImage::updateScreenSpacePosition () {
+ const Image& CImage::getImage () const { return this->m_image; }
+ 
+ glm::vec2 CImage::getSize () const {
++    if (m_scriptSize.getType () == DynamicValue::Vec2) return m_scriptSize.getVec2 ();
+     if (this->m_texture == nullptr) {
+ 	return this->getImage ().size;
+     }
+diff --git a/src/WallpaperEngine/Render/Objects/CImage.h b/src/WallpaperEngine/Render/Objects/CImage.h
+index 07eeda2..520d23a 100644
+--- a/src/WallpaperEngine/Render/Objects/CImage.h
++++ b/src/WallpaperEngine/Render/Objects/CImage.h
+@@ -128,6 +128,8 @@ private:
+     glm::vec3 m_sceneCenter = {};
+     glm::vec2 m_size = {};
+ 
++    DynamicValue m_scriptAlignment;
++    DynamicValue m_scriptSize;
+     bool m_initialized = false;
+ 
+     struct {
+diff --git a/src/WallpaperEngine/Render/Objects/CText.cpp b/src/WallpaperEngine/Render/Objects/CText.cpp
+index 8368634..93aed1e 100644
+--- a/src/WallpaperEngine/Render/Objects/CText.cpp
++++ b/src/WallpaperEngine/Render/Objects/CText.cpp
+@@ -82,14 +82,10 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
+     this->registerProperty ("visible", *text.visible->value);
+     this->registerProperty ("pointSize", *text.pointSize->value);
+     this->registerProperty ("text", *text.text->value);
+-    this->registerProperty ("pointSize", *text.pointSize->value);
++    this->registerProperty ("angles", *text.groupAngles->value);
+ }
+ 
+ CText::~CText () {
+-    if (m_layerHandle != Scripting::kInvalidLayerHandle) {
+-	this->getScene ().getScriptEngine ().destroyLayer (m_layerHandle);
+-	m_layerHandle = Scripting::kInvalidLayerHandle;
+-    }
+     if (m_vbo != 0) {
+ 	glDeleteBuffers (1, &m_vbo);
+     }
+@@ -135,9 +131,6 @@ void CText::setup () {
+     // glyph texture has non-zero dimensions until the script produces a value.
+     rebuildTextureFrom (text.empty () ? std::string (" ") : text);
+ 
+-    if (scripted) {
+-	initScriptLayer ();
+-    }
+ 
+     m_valid = m_texture != 0 && m_program != 0 && m_vao != 0;
+ }
+@@ -212,22 +205,6 @@ unsigned int CText::computeEffectivePixelSize () const {
+     return std::max<unsigned int> (1u, static_cast<unsigned int> (m_text.pointSize->value->getFloat () * compensate));
+ }
+ 
+-void CText::initScriptLayer () {
+-    const auto& script = m_text.text->value->getScriptSource ();
+-
+-    if (!script.has_value ()) {
+-	return;
+-    }
+-
+-    m_layerHandle = this->getScene ().getScriptEngine ().createLayerScript (
+-	*script, m_text.text->value->getProperties (), m_text.text->value->getString ()
+-    );
+-
+-    if (m_layerHandle == Scripting::kInvalidLayerHandle) {
+-	sLog.error ("CText: createLayerScript failed for '", m_text.name, "'");
+-    }
+-}
+-
+ void CText::rebuildTextureFrom (const std::string& text) {
+     // Two-pass rasterization: first measure the bounding box, then rasterize
+     // every glyph into a single grayscale bitmap. Phase 1 renders one line —
+@@ -382,16 +359,9 @@ void CText::render () {
+     std::string str = "Text " + this->getObject ().name + " (" + std::to_string (this->getObject ().id) + ")";
+     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
+ #endif /* DEBUG */
+-    std::string renderedText = m_lastRenderedText;
+-    if (m_layerHandle != Scripting::kInvalidLayerHandle) {
+-	auto& se = this->getScene ().getScriptEngine ();
+-	se.tickLayer (
+-	    m_layerHandle, static_cast<double> (getScene ().getTime ()),
+-	    static_cast<double> (getScene ().getDeltaTime ()), static_cast<double> (getScene ().getFps ())
+-	);
+-	const std::string current = se.layerText (m_layerHandle);
+-	renderedText = current.empty () ? std::string (" ") : current;
+-    }
++    // Use the same SceneScript lifecycle as every other property/layer.
++    const auto& currentText = m_text.text->value->getString ();
++    const std::string renderedText = currentText.empty () ? std::string (" ") : currentText;
+ 
+     const unsigned int pixelSize = computeEffectivePixelSize ();
+     if (pixelSize != m_lastPixelSize) {
+diff --git a/src/WallpaperEngine/Render/Objects/CText.h b/src/WallpaperEngine/Render/Objects/CText.h
+index 06c413f..374f5fe 100644
+--- a/src/WallpaperEngine/Render/Objects/CText.h
++++ b/src/WallpaperEngine/Render/Objects/CText.h
+@@ -58,12 +58,10 @@ private:
+     bool loadEmbeddedFont ();
+     bool loadSystemFont ();
+     unsigned int computeEffectivePixelSize () const;
+-    void initScriptLayer ();
+ 
+     const Text& m_text;
+     std::string m_lastRenderedText;
+     unsigned int m_lastPixelSize = 0;
+-    Scripting::ScriptLayerHandle m_layerHandle = Scripting::kInvalidLayerHandle;
+ 
+     FT_Library m_ftLibrary = nullptr;
+     FT_Face m_ftFace = nullptr;
+diff --git a/src/WallpaperEngine/Render/Shaders/GLSLContext.cpp b/src/WallpaperEngine/Render/Shaders/GLSLContext.cpp
+index dd4f4d4..c7808c4 100644
+--- a/src/WallpaperEngine/Render/Shaders/GLSLContext.cpp
++++ b/src/WallpaperEngine/Render/Shaders/GLSLContext.cpp
+@@ -1,3 +1,8 @@
++#include <algorithm>
++#include <cctype>
++#include <map>
++#include <regex>
++#include <sstream>
+ #include "GLSLContext.h"
+ #include "WallpaperEngine/Logging/Log.h"
+ 
+@@ -115,6 +120,121 @@ TBuiltInResource BuiltInResource = { .maxLights = 32,
+ 					 .generalConstantMatrixVectorIndexing = true,
+ 				     } };
+ 
++
++namespace {
++/**
++ * Wallpaper Engine compiles shaders with an HLSL-derived compiler that silently truncates the larger vector when
++ * two vectors of different sizes meet (vec4 * vec2, vec3 = vec4). GLSL rejects both, which leaves every wallpaper
++ * using such a shader black. Rewrites the offending lines using glslang's own error messages so that parsing can
++ * be retried; returns false when nothing could be repaired.
++ */
++bool repairVectorTruncation (std::string& source, const std::string& log) {
++    static const std::regex operandsError (
++	R"(ERROR: 0:(\d+): '[^']*' :\s+wrong operand types: no operation '[^']*' exists that takes a left-hand operand of type '[^']*?(\d)-component vector of float' and a right operand of type '[^']*?(\d)-component vector of float')"
++    );
++    static const std::regex convertError (
++	R"(ERROR: 0:(\d+): '=' :\s+cannot convert from '[^']*?(\d)-component vector of float' to '[^']*?(\d)-component vector of float')"
++    );
++    static const std::regex declaration (R"(\bvec([234])\s+(\w+)\s*[;=,\[)])");
++    static const char* swizzle[] = { "", "", ".xy", ".xyz" };
++
++    std::map<std::string, int> sizes;
++    for (std::sregex_iterator it (source.begin (), source.end (), declaration), end; it != end; ++it) {
++	sizes[(*it)[2]] = std::stoi ((*it)[1]);
++    }
++
++    std::vector<std::string> lines;
++    {
++	std::istringstream in (source);
++	for (std::string line; std::getline (in, line);) {
++	    lines.push_back (line);
++	}
++    }
++
++    bool changed = false;
++
++    // vec4 * vec2: cut the identifiers of the larger size down to the smaller one
++    for (std::sregex_iterator it (log.begin (), log.end (), operandsError), end; it != end; ++it) {
++	const size_t number = std::stoul ((*it)[1]);
++	const int left = std::stoi ((*it)[2]);
++	const int right = std::stoi ((*it)[3]);
++	const int large = std::max (left, right);
++	const int small = std::min (left, right);
++	if (number == 0 || number > lines.size () || large == small || small < 2) {
++	    continue;
++	}
++	std::string& line = lines[number - 1];
++	std::string out;
++	for (size_t i = 0; i < line.size ();) {
++	    if (std::isalpha (static_cast<unsigned char> (line[i])) || line[i] == '_') {
++		size_t j = i;
++		while (j < line.size () && (std::isalnum (static_cast<unsigned char> (line[j])) || line[j] == '_')) {
++		    j++;
++		}
++		const std::string word = line.substr (i, j - i);
++		const bool member = i > 0 && line[i - 1] == '.';
++		const bool accessed = j < line.size () && (line[j] == '.' || line[j] == '(' || line[j] == '[');
++		const auto size = sizes.find (word);
++		out += word;
++		if (!member && !accessed && size != sizes.end () && size->second == large) {
++		    out += swizzle[small];
++		    changed = true;
++		}
++		i = j;
++	    } else {
++		out += line[i++];
++	    }
++	}
++	line = out;
++    }
++
++    // vec3 = vec4: keep the first components of the right-hand side
++    for (std::sregex_iterator it (log.begin (), log.end (), convertError), end; it != end; ++it) {
++	const size_t number = std::stoul ((*it)[1]);
++	const int from = std::stoi ((*it)[2]);
++	const int to = std::stoi ((*it)[3]);
++	if (number == 0 || number > lines.size () || to >= from || to < 2) {
++	    continue;
++	}
++	std::string& line = lines[number - 1];
++	const size_t equals = line.find ('=');
++	const size_t semicolon = line.rfind (';');
++	if (equals == std::string::npos || semicolon == std::string::npos || semicolon < equals
++	    || (equals + 1 < line.size () && line[equals + 1] == '=')) {
++	    continue;
++	}
++	line = line.substr (0, equals + 1) + " (" + line.substr (equals + 1, semicolon - equals - 1) + ")"
++	    + swizzle[to] + line.substr (semicolon);
++	changed = true;
++    }
++
++    if (changed) {
++	source.clear ();
++	for (const auto& line : lines) {
++	    source += line + "\n";
++	}
++    }
++
++    return changed;
++}
++
++/** Parses a shader, retrying a few times after repairing vector size mismatches. */
++bool parseRepairing (glslang::TShader& shader, std::string& source, const TBuiltInResource& resources) {
++    for (int attempt = 0; attempt < 8; attempt++) {
++	const char* text = source.c_str ();
++	shader.setStrings (&text, 1);
++	if (shader.parse (&resources, 100, false, EShMsgDefault)) {
++	    return true;
++	}
++	if (!repairVectorTruncation (source, shader.getInfoLog ())) {
++	    return false;
++	}
++	sLog.out ("Repaired implicit vector truncation in shader, retrying");
++    }
++    return false;
++}
++} // namespace
++
+ GLSLContext::GLSLContext () {
+     assert (this->sInstance == nullptr);
+ 
+@@ -134,8 +254,7 @@ GLSLContext& GLSLContext::get () {
+ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vertex, const std::string& fragment) {
+     glslang::TShader vertexShader (EShLangVertex);
+ 
+-    const char* vertexSource = vertex.c_str ();
+-    vertexShader.setStrings (&vertexSource, 1);
++    std::string vertexText = vertex;
+     vertexShader.setEntryPoint ("main");
+     vertexShader.setEnvInput (glslang::EShSourceGlsl, EShLangVertex, glslang::EShClientOpenGL, 330);
+     vertexShader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
+@@ -143,14 +262,13 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
+     vertexShader.setAutoMapLocations (true);
+     vertexShader.setAutoMapBindings (true);
+ 
+-    if (!vertexShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
++    if (!parseRepairing (vertexShader, vertexText, BuiltInResource)) {
+ 	sLog.error ("GLSL vertex unit parsing Failed: ", vertexShader.getInfoLog ());
+ 	return { "", "" };
+     }
+     glslang::TShader fragmentShader (EShLangFragment);
+ 
+-    const char* fragmentSource = fragment.c_str ();
+-    fragmentShader.setStrings (&fragmentSource, 1);
++    std::string fragmentText = fragment;
+     fragmentShader.setEntryPoint ("main");
+     fragmentShader.setEnvInput (glslang::EShSourceGlsl, EShLangFragment, glslang::EShClientOpenGL, 330);
+     fragmentShader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
+@@ -158,7 +276,7 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
+     fragmentShader.setAutoMapLocations (true);
+     fragmentShader.setAutoMapBindings (true);
+ 
+-    if (!fragmentShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
++    if (!parseRepairing (fragmentShader, fragmentText, BuiltInResource)) {
+ 	sLog.error ("GLSL fragment unit parsing Failed: ", fragmentShader.getInfoLog ());
+ 	return { "", "" };
+     }
+diff --git a/src/WallpaperEngine/Render/Wallpapers/CScene.cpp b/src/WallpaperEngine/Render/Wallpapers/CScene.cpp
+index 4933440..74938cc 100644
+--- a/src/WallpaperEngine/Render/Wallpapers/CScene.cpp
++++ b/src/WallpaperEngine/Render/Wallpapers/CScene.cpp
+@@ -12,6 +12,8 @@
+ #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
+ 
+ #include <ranges>
++#include <filesystem>
++#include <algorithm>
+ 
+ extern float g_Time;
+ extern float g_TimeLast;
+@@ -167,6 +169,7 @@ CScene::CScene (
+ }
+ 
+ CScene::~CScene () {
++    this->m_scriptEngine->shutdown ();
+     // bloom object is in the objects list, so no need to explicitly delete it
+     this->m_bloomObject = nullptr;
+ 
+@@ -244,8 +247,7 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
+ 
+ 	renderObject = new Objects::CParticle (*this, particleData);
+     } else {
+-	sLog.error ("Unknown object type, creating placeholder, empty object: ", object.id);
+-	renderObject = new CObject (*this, object);
++	renderObject = new Scripting::ScriptableObject (*this, object);
+     }
+ 
+     try {
+@@ -424,3 +426,47 @@ const CObject* CScene::getObject (int id) const {
+     const auto object = this->m_objects.find (id);
+     return object == this->m_objects.end () ? nullptr : object->second;
+ }
++
++CObject* CScene::createImageLayer (const std::string& requestedModel, const std::string& config) {
++    if (m_dynamicObjects.size () >= 1024) throw std::runtime_error ("Dynamic image layer limit reached");
++    std::string model = requestedModel;
++    try { this->getAssetLocator ().readString (model); }
++    catch (const std::exception&) {
++        // Workshop imports relocate model assets; accept an unambiguous basename from a loaded image.
++        std::string resolved;
++        for (const auto& object : this->getScene ().objects) {
++            if (!object->is<Image> ()) continue;
++            const auto& candidate = object->as<Image> ()->model->filename;
++            if (std::filesystem::path (candidate).filename () != std::filesystem::path (model).filename ()) continue;
++            if (!resolved.empty () && resolved != candidate) throw std::runtime_error ("Ambiguous dynamic image model");
++            resolved = candidate;
++        }
++        if (resolved.empty ()) throw;
++        model = resolved;
++    }
++    int id = m_objects.empty () ? 1 : m_objects.rbegin ()->first + 1;
++    auto json = config.empty () ? Data::JSON::JSON::object () : Data::JSON::JSON::parse (config);
++    json["id"] = id;
++    if (!json.contains ("name")) json["name"] = model;
++    json["image"] = model;
++    auto data = ObjectParser::parse (json, this->getScene ().project);
++    CObject* object = this->createObject (*data);
++    if (!object) throw std::runtime_error ("Cannot create image layer");
++    m_dynamicObjects.push_back (std::move (data));
++    m_objectsByRenderOrder.push_back (object);
++    return object;
++}
++
++int CScene::layerIndex (int id) const {
++    for (size_t i = 0; i < m_objectsByRenderOrder.size (); ++i) if (m_objectsByRenderOrder[i]->getId () == id) return static_cast<int> (i);
++    return -1;
++}
++
++void CScene::sortLayer (int id, int index) {
++    int oldIndex = this->layerIndex (id);
++    if (oldIndex < 0) return;
++    auto* object = m_objectsByRenderOrder[oldIndex];
++    m_objectsByRenderOrder.erase (m_objectsByRenderOrder.begin () + oldIndex);
++    index = std::clamp (index, 0, static_cast<int> (m_objectsByRenderOrder.size ()));
++    m_objectsByRenderOrder.insert (m_objectsByRenderOrder.begin () + index, object);
++}
+diff --git a/src/WallpaperEngine/Render/Wallpapers/CScene.h b/src/WallpaperEngine/Render/Wallpapers/CScene.h
+index 9e12f3f..7aff275 100644
+--- a/src/WallpaperEngine/Render/Wallpapers/CScene.h
++++ b/src/WallpaperEngine/Render/Wallpapers/CScene.h
+@@ -44,6 +44,9 @@ public:
+ 
+     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
+     [[nodiscard]] const CObject* getObject (int id) const;
++    CObject* createImageLayer (const std::string& model, const std::string& config = "");
++    int layerIndex (int id) const;
++    void sortLayer (int id, int index);
+ 
+ protected:
+     void renderFrame (const glm::ivec4& viewport) override;
+@@ -58,6 +61,7 @@ private:
+ 
+     std::unique_ptr<Scripting::ScriptEngine> m_scriptEngine;
+     std::unique_ptr<Camera> m_camera;
++    std::vector<ObjectUniquePtr> m_dynamicObjects;
+     ObjectUniquePtr m_bloomObjectData;
+     CObject* m_bloomObject = nullptr;
+     std::map<int, CObject*> m_objects = {};
+diff --git a/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.cpp b/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.cpp
+index f62ad1d..80384ec 100644
+--- a/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.cpp
++++ b/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.cpp
+@@ -1,6 +1,7 @@
+ #include "ScriptableObjectAdapter.h"
+ 
+ #include <utility>
++#include <cstring>
+ 
+ #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
+ #include "WallpaperEngine/Scripting/ScriptEngine.h"
+@@ -8,6 +9,7 @@
+ 
+ using namespace WallpaperEngine::Data::Model;
+ using namespace WallpaperEngine::Data::Utils;
++using namespace WallpaperEngine::Scripting;
+ using namespace WallpaperEngine::Scripting::Adapters;
+ 
+ #define SCRIPTABLE_OPAQUE_MAGIC 0xdeadbeef
+@@ -35,14 +37,12 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
+ 
+     ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
+ 
+-    try {
+-	// find the property inside, otherwise return undefined
+-	auto& property = container->object.getProperty (name);
+-
+-	return container->adapter.getEngine ().dynamicToJs (property);
+-    } catch (const std::exception& e) {
+-	return JS_UNDEFINED;
+-    }
++    if (std::strcmp (name, "name") == 0) return JS_NewString (ctx, container->object.getObject ().name.c_str ());
++    if (std::strcmp (name, "id") == 0) return JS_NewInt32 (ctx, container->object.getId ());
++    const auto& properties = container->object.getProperties ();
++    const auto it = properties.find (name);
++    if (it == properties.end ()) return JS_UNDEFINED;
++    return container->adapter.getEngine ().dynamicToJs (it->second.value);
+ }
+ 
+ int scriptableobject_property_set (
+@@ -62,19 +62,42 @@ int scriptableobject_property_set (
+ 	return -1;
+     }
+ 
+-    return 0;
++    ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
++    try {
++        auto& property = container->object.getProperty (name);
++        jsToDynamicValue (ctx, val, property);
++        return 1;
++    } catch (const std::exception& e) {
++        JS_ThrowTypeError (ctx, "%s", e.what ());
++        return -1;
++    }
+ }
+ 
++static void scriptableobject_finalizer (JSRuntime*, JSValue);
++
+ ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine, std::string name) :
+     ObjectAdapter (engine), m_exoticMethods (), m_name (std::move (name)) {
++    this->m_exoticMethods.get_property = scriptableobject_property_get;
++    this->m_exoticMethods.set_property = scriptableobject_property_set;
+     this->registerType (
+ 	{
+ 	    .class_name = m_name.c_str (),
++            .finalizer = scriptableobject_finalizer,
+ 	    .exotic = &m_exoticMethods,
+ 	}
+     );
+ }
+ 
++ScriptableObject* ScriptableObjectAdapter::unwrap (JSValueConst value) const {
++    auto* container = static_cast<OpaqueScriptableObjectAdapter*> (JS_GetOpaque (value, this->m_classId));
++    return container && container->magic == SCRIPTABLE_OPAQUE_MAGIC ? &container->object : nullptr;
++}
++
++static void scriptableobject_finalizer (JSRuntime*, JSValue value) {
++    JSClassID classId;
++    delete static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (value, &classId));
++}
++
+ JSValue ScriptableObjectAdapter::instantiate (ScriptableObject& object) {
+     JSValue result = this->ObjectAdapter::instantiate (object);
+     JS_SetOpaque (
+diff --git a/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h b/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h
+index ea8bc32..8f1560c 100644
+--- a/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h
++++ b/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h
+@@ -7,6 +7,7 @@ class ScriptableObjectAdapter : public ObjectAdapter {
+ public:
+     explicit ScriptableObjectAdapter (ScriptEngine& engine, std::string name);
+ 
++    ScriptableObject* unwrap (JSValueConst value) const;
+     JSValue instantiate (ScriptableObject& object) override;
+     JSValue instantiate (Data::Model::DynamicValue& value) override;
+ 
+diff --git a/src/WallpaperEngine/Scripting/Adapters/VectorAdapter.cpp b/src/WallpaperEngine/Scripting/Adapters/VectorAdapter.cpp
+index 1162bf2..f2ec36a 100644
+--- a/src/WallpaperEngine/Scripting/Adapters/VectorAdapter.cpp
++++ b/src/WallpaperEngine/Scripting/Adapters/VectorAdapter.cpp
+@@ -10,7 +10,6 @@ using namespace WallpaperEngine::Data::Utils;
+ using namespace WallpaperEngine::Data::Model;
+ using namespace WallpaperEngine::Scripting::Adapters;
+ 
+-static uint32_t VectorInstanceId = 0;
+ static uint32_t VectorAdapterInstanceId = 0;
+ static constexpr int InvalidVectorInstanceId = 0;
+ 
+@@ -36,6 +35,7 @@ template <int components> struct VectorOpaqueContainer {
+     VectorAdapter<components>& adapter;
+     DynamicValue& value;
+     uint32_t id;
++    std::shared_ptr<DynamicValue> ownedValue;
+ };
+ 
+ template <int components> auto vector_new () -> decltype (auto) {
+@@ -190,7 +190,10 @@ JSValue vector_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom,
+ 	}
+     }
+ 
+-    return JS_EXCEPTION;
++    JSValue prototype = JS_GetClassProto (ctx, classId);
++    JSValue result = JS_GetProperty (ctx, prototype, atom);
++    JS_FreeValue (ctx, prototype);
++    return result;
+ }
+ 
+ template JSValue vector_property_get<2> (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver);
+@@ -270,7 +273,7 @@ int vector_property_set (
+ 
+     container->value.update (vec, DynamicValue::UpdateSource::Script);
+ 
+-    return 0;
++    return 1;
+ }
+ 
+ template int vector_property_set<2> (
+@@ -370,10 +373,6 @@ template JSValue vector_length<4> (JSContext* ctx, JSValueConst this_val, int ar
+ 
+ template <int components>
+ JSValue vector_constructor (JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv, int magic) {
+-    if (argc == 0) {
+-	return JS_EXCEPTION;
+-    }
+-
+     auto it = vectorAdapterInstances<components>.find (magic);
+ 
+     if (it == vectorAdapterInstances<components>.end ()) {
+@@ -386,7 +385,18 @@ JSValue vector_constructor (JSContext* ctx, JSValueConst new_target, int argc, J
+ 
+     VEC_MAGIC_CHECK_EXCEPTION (container, components);
+ 
+-    container->value.update (vector_get<components> (ctx, argv[0]), DynamicValue::UpdateSource::Initialization);
++    try {
++        auto value = vector_new<components> ();
++        if (argc == 1) value = vector_get<components> (ctx, argv[0]);
++        else if (argc >= components) {
++            for (int i = 0; i < components; ++i) {
++                double component;
++                if (JS_ToFloat64 (ctx, &component, argv[i]) < 0) { JS_FreeValue (ctx, result); return JS_EXCEPTION; }
++                value[i] = component;
++            }
++        } else if (argc != 0) { JS_FreeValue (ctx, result); return JS_ThrowTypeError (ctx, "Invalid vector arguments"); }
++        container->value.update (value, DynamicValue::UpdateSource::Initialization);
++    } catch (const std::exception& e) { JS_FreeValue (ctx, result); return JS_ThrowTypeError (ctx, "%s", e.what ()); }
+ 
+     return result;
+ }
+@@ -404,9 +414,6 @@ template <int components> void vector_finalizer (JSRuntime* rt, JSValueConst val
+     }
+ 
+     // free container and the associated DynamicValue if temporal
+-    if (container->id != InvalidVectorInstanceId) {
+-	container->adapter.free (container->id);
+-    }
+ 
+     delete container;
+ }
+@@ -924,7 +931,7 @@ VectorAdapter<components>::VectorAdapter (ScriptEngine& engine) :
+     );
+ 
+     JS_SetClassProto (this->m_engine.getContext (), this->m_classId, m_prototype);
+-    JS_FreeValue (this->m_engine.getContext (), ctor);
++    JS_SetPropertyStr (this->m_engine.getContext (), this->m_engine.getGlobalThis (), this->m_name.c_str (), ctor);
+ }
+ 
+ template <int components> VectorAdapter<components>::~VectorAdapter () {
+@@ -953,8 +960,7 @@ template <int components> JSValue VectorAdapter<components>::instantiate (Dynami
+ }
+ 
+ template <int components> JSValue VectorAdapter<components>::instantiate (DynamicValue& source, bool temporal) {
+-    auto value = std::make_unique<DynamicValue> (source);
+-    uint32_t id = ++VectorInstanceId;
++    auto value = std::make_shared<DynamicValue> (source);
+     JSValue result = this->ObjectAdapter::instantiate (*value);
+     JS_SetOpaque (
+ 	result,
+@@ -962,18 +968,17 @@ template <int components> JSValue VectorAdapter<components>::instantiate (Dynami
+ 	    .magic = VEC_OPAQUE_MAGIC + components,
+ 	    .adapter = *this,
+ 	    .value = *value,
+-	    .id = id,
++	    .id = InvalidVectorInstanceId,
++            .ownedValue = value,
+ 	}
+     );
+ 
+-    this->m_values.emplace (id, std::move (value));
+ 
+     return result;
+ }
+ 
+ template <int components> JSValue VectorAdapter<components>::instantiate () {
+-    auto value = std::make_unique<DynamicValue> (vector_new<components> ());
+-    uint32_t id = ++VectorInstanceId;
++    auto value = std::make_shared<DynamicValue> (vector_new<components> ());
+     JSValue result = this->ObjectAdapter::instantiate (*value);
+     JS_SetOpaque (
+ 	result,
+@@ -981,11 +986,11 @@ template <int components> JSValue VectorAdapter<components>::instantiate () {
+ 	    .magic = VEC_OPAQUE_MAGIC + components,
+ 	    .adapter = *this,
+ 	    .value = *value,
+-	    .id = id,
++	    .id = InvalidVectorInstanceId,
++            .ownedValue = value,
+ 	}
+     );
+ 
+-    this->m_values.emplace (id, std::move (value));
+ 
+     return result;
+ }
+diff --git a/src/WallpaperEngine/Scripting/EngineObject.cpp b/src/WallpaperEngine/Scripting/EngineObject.cpp
+index b8399fa..894b4b4 100644
+--- a/src/WallpaperEngine/Scripting/EngineObject.cpp
++++ b/src/WallpaperEngine/Scripting/EngineObject.cpp
+@@ -1,6 +1,10 @@
+ #include "EngineObject.h"
+ #include "ScriptEngine.h"
+ #include "WallpaperEngine/Logging/Log.h"
++#include "WallpaperEngine/Render/Wallpapers/CScene.h"
++#include <cmath>
++#include <algorithm>
++#include "WallpaperEngine/Data/Model/Property.h"
+ 
+ #include <ranges>
+ 
+@@ -13,6 +17,47 @@ extern float g_Daytime;
+ static uint32_t EngineInstanceId = 0;
+ std::map<uint32_t, EngineObject&> engineInstances;
+ 
++JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
++    const auto it = engineInstances.find (magic);
++    if (it == engineInstances.end ()) return JS_ThrowInternalError (ctx, "Audio engine unavailable");
++    double resolution = 0;
++    if (argc != 1 || JS_ToFloat64 (ctx, &resolution, argv[0]) < 0) return JS_ThrowTypeError (ctx, "Audio resolution must be 16, 32 or 64");
++    if (resolution != 16 && resolution != 32 && resolution != 64) return JS_ThrowRangeError (ctx, "Audio resolution must be 16, 32 or 64");
++    return it->second.registerAudioBuffers (static_cast<int> (resolution));
++}
++
++JSValue engine_is_screensaver (JSContext* ctx, JSValueConst, int, JSValueConst*) { return JS_FALSE; }
++JSValue engine_register_asset (JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
++    if (argc != 1 || !JS_IsString (argv[0])) return JS_ThrowTypeError (ctx, "registerAsset requires an asset path");
++    // Assets are already packaged on Linux; keep their path as the runtime handle.
++    return JS_DupValue (ctx, argv[0]);
++}
++
++JSValue engine_canvas_size (JSContext* ctx, JSValueConst self, int, JSValueConst*) {
++    JSClassID id;
++    auto* object = static_cast<EngineObject*> (JS_GetAnyOpaque (self, &id));
++    WallpaperEngine::Data::Model::DynamicValue value (glm::vec2 (object->getScene ().getWidth (), object->getScene ().getHeight ()));
++    return object->getEngine ().getAdapters ().vec2->instantiate (value, true);
++}
++
++JSValue engine_user_properties (JSContext* ctx, JSValueConst self, int, JSValueConst*) {
++    JSClassID id;
++    auto* object = static_cast<EngineObject*> (JS_GetAnyOpaque (self, &id));
++    JSValue properties = JS_NewObject (ctx);
++    for (const auto& [key, property] : object->getScene ().getScene ().project.properties)
++        JS_SetPropertyStr (ctx, properties, key.c_str (), object->getEngine ().dynamicToJs (*property));
++    return properties;
++}
++
++JSValue engine_device_flag (JSContext* ctx, JSValueConst self, int, JSValueConst*, int magic) {
++    JSClassID id;
++    auto* object = static_cast<EngineObject*> (JS_GetAnyOpaque (self, &id));
++    bool value = magic == 0 || magic == 2;
++    if (magic == 4) value = object->getScene ().getWidth () < object->getScene ().getHeight ();
++    if (magic == 5) value = object->getScene ().getWidth () >= object->getScene ().getHeight ();
++    return JS_NewBool (ctx, value);
++}
++
+ JSValue engine_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
+ 
+ JSValue engine_open_user_shortcut (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+@@ -34,10 +79,6 @@ JSValue engine_get_daytime (JSContext* ctx, JSValueConst this_val, int argc, JSV
+ JSValue engine_stop_interval (
+     JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
+ ) {
+-    if (argc != 1) {
+-	return JS_EXCEPTION;
+-    }
+-
+     const auto it = engineInstances.find (magic);
+ 
+     if (it == engineInstances.end ()) {
+@@ -46,7 +87,7 @@ JSValue engine_stop_interval (
+ 
+     int id = 0;
+ 
+-    JS_ToInt32 (ctx, &id, argv[0]);
++    JS_ToInt32 (ctx, &id, func_data[0]);
+ 
+     it->second.clearInterval (id);
+ 
+@@ -56,10 +97,6 @@ JSValue engine_stop_interval (
+ JSValue engine_stop_timeout (
+     JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
+ ) {
+-    if (argc != 1) {
+-	return JS_EXCEPTION;
+-    }
+-
+     const auto it = engineInstances.find (magic);
+ 
+     if (it == engineInstances.end ()) {
+@@ -68,7 +105,7 @@ JSValue engine_stop_timeout (
+ 
+     int id = 0;
+ 
+-    JS_ToInt32 (ctx, &id, argv[0]);
++    JS_ToInt32 (ctx, &id, func_data[0]);
+ 
+     it->second.clearTimeout (id);
+ 
+@@ -98,11 +135,11 @@ JSValue engine_set_interval (JSContext* ctx, JSValueConst this_val, int argc, JS
+ 	return JS_EXCEPTION;
+     }
+ 
+-    int id = it->second.reserveNextIntervalId (function, delay);
++    int id = it->second.reserveNextIntervalId (function, std::max (0, delay));
+ 
+     JSValue args[] = { JS_NewInt32 (ctx, id) };
+ 
+-    return JS_NewCFunctionData (ctx, engine_stop_interval, 2, magic, 1, args);
++    return JS_NewCFunctionData (ctx, engine_stop_interval, 0, magic, 1, args);
+ }
+ 
+ JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+@@ -128,11 +165,11 @@ JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSV
+ 	return JS_EXCEPTION;
+     }
+ 
+-    int id = it->second.reserveNextTimeoutId (function, delay);
++    int id = it->second.reserveNextTimeoutId (function, std::max (0, delay));
+ 
+     JSValue args[] = { JS_NewInt32 (ctx, id) };
+ 
+-    return JS_NewCFunctionData (ctx, engine_stop_timeout, 2, magic, 1, args);
++    return JS_NewCFunctionData (ctx, engine_stop_timeout, 0, magic, 1, args);
+ }
+ 
+ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
+@@ -144,6 +181,7 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
+ 
+     JS_DupValue (this->m_engine.getContext (), this->m_instance);
+ 
++    engineInstances.emplace (this->m_instanceId, *this);
+     // set properties
+     JS_SetOpaque (this->m_instance, this);
+     JS_DefinePropertyGetSet (
+@@ -176,14 +214,14 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), this->m_instance, "setInterval",
+ 	JS_NewCFunctionMagic (
+-	    this->m_engine.getContext (), engine_set_interval, "setInterval", 2, JS_CFUNC_generic, this->m_instanceId
++	    this->m_engine.getContext (), engine_set_interval, "setInterval", 2, JS_CFUNC_generic_magic, this->m_instanceId
+ 	),
+ 	JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), this->m_instance, "setTimeout",
+ 	JS_NewCFunctionMagic (
+-	    this->m_engine.getContext (), engine_set_timeout, "setTimeout", 2, JS_CFUNC_generic, this->m_instanceId
++	    this->m_engine.getContext (), engine_set_timeout, "setTimeout", 2, JS_CFUNC_generic_magic, this->m_instanceId
+ 	),
+ 	JS_PROP_ENUMERABLE
+     );
+@@ -192,16 +230,35 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
+ 	JS_NewCFunction (this->m_engine.getContext (), engine_open_user_shortcut, "openUserShortcut", 0),
+ 	JS_PROP_ENUMERABLE
+     );
++    JS_DefinePropertyValueStr (
++        this->m_engine.getContext (), this->m_instance, "registerAudioBuffers",
++        JS_NewCFunctionMagic (this->m_engine.getContext (), engine_register_audio_buffers,
++                             "registerAudioBuffers", 1, JS_CFUNC_generic_magic, this->m_instanceId), JS_PROP_ENUMERABLE
++    );
++    JS_SetPropertyStr (engine.getContext (), m_instance, "isScreensaver", JS_NewCFunction (engine.getContext (), engine_is_screensaver, "isScreensaver", 0));
++    JS_SetPropertyStr (engine.getContext (), m_instance, "registerAsset", JS_NewCFunction (engine.getContext (), engine_register_asset, "registerAsset", 1));
++    for (const char* name : { "canvasSize", "screenResolution" }) {
++        JS_DefinePropertyGetSet (engine.getContext (), m_instance, JS_NewAtom (engine.getContext (), name),
++            JS_NewCFunction (engine.getContext (), engine_canvas_size, "get", 0), JS_UNDEFINED, JS_PROP_ENUMERABLE);
++    }
++    JS_DefinePropertyGetSet (engine.getContext (), m_instance, JS_NewAtom (engine.getContext (), "userProperties"),
++        JS_NewCFunction (engine.getContext (), engine_user_properties, "get", 0), JS_UNDEFINED, JS_PROP_ENUMERABLE);
++    const char* modes[] = { "isDesktopDevice", "isMobileDevice", "isWallpaper", "isScreensaver", "isPortrait", "isLandscape", "isRunningInEditor" };
++    for (int i = 0; i < 7; ++i) JS_SetPropertyStr (engine.getContext (), m_instance, modes[i],
++        JS_NewCFunctionMagic (engine.getContext (), engine_device_flag, modes[i], 0, JS_CFUNC_generic_magic, i));
+     // TODO: ADD THE REST OF THE DEFINITION!
+ }
+ 
+ EngineObject::~EngineObject () {
++    for (const auto& [resolution, buffers] : this->m_audioBuffers) JS_FreeValue (this->m_engine.getContext (), buffers);
+     // clear all the timeouts and intervals
+     for (const auto& [id, timeout] : this->m_timeouts) {
+ 	JS_FreeValue (this->m_engine.getContext (), timeout.callback);
++        JS_FreeValue (this->m_engine.getContext (), timeout.layer);
+     }
+     for (const auto& [id, interval] : this->m_intervals) {
+ 	JS_FreeValue (this->m_engine.getContext (), interval.callback);
++        JS_FreeValue (this->m_engine.getContext (), interval.layer);
+     }
+ 
+     engineInstances.erase (this->m_instanceId);
+@@ -214,7 +271,8 @@ EngineObject::~EngineObject () {
+ uint32_t EngineObject::reserveNextTimeoutId (JSValue function, uint64_t duration) {
+     const auto id = ++this->m_nextTimeoutId;
+ 
+-    this->m_timeouts[id] = Timeout { .callback = function,
++    this->m_timeouts[id] = Timeout { .callback = JS_DupValue (m_engine.getContext (), function),
++                                 .layer = JS_GetPropertyStr (m_engine.getContext (), m_engine.getGlobalThis (), "thisLayer"),
+ 				     .duration = std::chrono::milliseconds (duration),
+ 				     .next = std::chrono::steady_clock::now () + std::chrono::milliseconds (duration) };
+ 
+@@ -225,7 +283,8 @@ uint32_t EngineObject::reserveNextIntervalId (JSValue function, uint64_t duratio
+     const auto id = ++this->m_nextIntervalId;
+ 
+     this->m_intervals[id]
+-	= Timeout { .callback = function,
++	= Timeout { .callback = JS_DupValue (m_engine.getContext (), function),
++                                 .layer = JS_GetPropertyStr (m_engine.getContext (), m_engine.getGlobalThis (), "thisLayer"),
+ 		    .duration = std::chrono::milliseconds (duration),
+ 		    .next = std::chrono::steady_clock::now () + std::chrono::milliseconds (duration) };
+ 
+@@ -240,6 +299,7 @@ void EngineObject::clearInterval (uint32_t id) {
+     }
+ 
+     JS_FreeValue (this->getEngine ().getContext (), it->second.callback);
++    JS_FreeValue (this->getEngine ().getContext (), it->second.layer);
+ 
+     this->m_intervals.erase (id);
+ }
+@@ -252,40 +312,77 @@ void EngineObject::clearTimeout (uint32_t id) {
+     }
+ 
+     JS_FreeValue (this->getEngine ().getContext (), it->second.callback);
++    JS_FreeValue (this->getEngine ().getContext (), it->second.layer);
+ 
+     this->m_timeouts.erase (id);
+ }
+ 
+-void EngineObject::tick () {
+-    const auto now = std::chrono::steady_clock::now ();
+-
+-    // check any interval and run them if needed
+-    for (auto& timeout : this->m_intervals | std::views::values) {
+-	if (timeout.next > now) {
+-	    continue;
+-	}
+-
+-	timeout.next = now + timeout.duration;
+-
+-	JS_Call (this->m_engine.getContext (), timeout.callback, JS_NULL, 0, nullptr);
++JSValue EngineObject::registerAudioBuffers (int resolution) {
++    auto* ctx = this->m_engine.getContext ();
++    auto it = this->m_audioBuffers.find (resolution);
++    if (it != this->m_audioBuffers.end ()) return JS_DupValue (ctx, it->second);
++    JSValue buffers = JS_NewObject (ctx);
++    for (const char* channel : { "left", "right", "average" }) {
++        JSValue length = JS_NewInt32 (ctx, resolution);
++        JSValue array = JS_NewTypedArray (ctx, 1, &length, JS_TYPED_ARRAY_FLOAT32);
++        for (int i = 0; i < resolution; ++i) JS_SetPropertyUint32 (ctx, array, i, JS_NewFloat64 (ctx, 0));
++        JS_SetPropertyStr (ctx, buffers, channel, array);
+     }
++    this->m_audioBuffers.emplace (resolution, buffers);
++    return JS_DupValue (ctx, buffers);
++}
+ 
+-    std::vector<uint32_t> removeTimeouts;
+-
+-    // check any timeout and run them if needed
+-    for (auto& [id, timeout] : this->m_timeouts) {
+-	if (timeout.next > now) {
+-	    continue;
+-	}
+-
+-	JS_Call (this->m_engine.getContext (), timeout.callback, JS_NULL, 0, nullptr);
+-
+-	JS_FreeValue (this->m_engine.getContext (), timeout.callback);
+-
+-	removeTimeouts.push_back (id);
++void EngineObject::tick () {
++    auto* ctx = this->m_engine.getContext ();
++    const auto& recorder = this->m_scene.getAudioContext ().getRecorder ();
++    for (const auto& [resolution, buffers] : this->m_audioBuffers) {
++        const float* values = resolution == 16 ? recorder.audio16 : resolution == 32 ? recorder.audio32 : recorder.audio64;
++        // The recorder currently captures a mono mix; expose it consistently in all channels.
++        for (const char* channel : { "left", "right", "average" }) {
++            JSValue array = JS_GetPropertyStr (ctx, buffers, channel);
++            for (int i = 0; i < resolution; ++i) {
++                const float value = std::isfinite (values[i]) ? std::clamp (values[i], 0.0f, 1.0f) : 0.0f;
++                JS_SetPropertyUint32 (ctx, array, i, JS_NewFloat64 (ctx, value));
++            }
++            JS_FreeValue (ctx, array);
++        }
+     }
++    const auto now = std::chrono::steady_clock::now ();
+ 
+-    for (auto id : removeTimeouts) {
+-	this->m_timeouts.erase (id);
++    auto invoke = [this, ctx] (JSValue callback, JSValue layer) {
++        JSValue previous = JS_GetPropertyStr (ctx, m_engine.getGlobalThis (), "thisLayer");
++        JS_SetPropertyStr (ctx, m_engine.getGlobalThis (), "thisLayer", JS_DupValue (ctx, layer));
++        JSValue result = JS_Call (ctx, callback, JS_UNDEFINED, 0, nullptr);
++        if (JS_IsException (result)) {
++            JSValue error = JS_GetException (ctx);
++            const char* message = JS_ToCString (ctx, error);
++            sLog.error ("SceneScript timer: ", message ? message : "exception");
++            JS_FreeCString (ctx, message);
++            JS_FreeValue (ctx, error);
++        }
++        JS_FreeValue (ctx, result);
++        JS_SetPropertyStr (ctx, m_engine.getGlobalThis (), "thisLayer", previous);
++    };
++    // Snapshot ids: callbacks may cancel themselves or schedule more timers.
++    std::vector<uint32_t> dueIntervals, dueTimeouts;
++    for (const auto& [id, timer] : m_intervals) if (timer.next <= now) dueIntervals.push_back (id);
++    for (const auto& [id, timer] : m_timeouts) if (timer.next <= now) dueTimeouts.push_back (id);
++    for (auto id : dueIntervals) {
++        auto it = m_intervals.find (id);
++        if (it == m_intervals.end ()) continue;
++        it->second.next = now + it->second.duration;
++        JSValue callback = JS_DupValue (ctx, it->second.callback);
++        JSValue layer = JS_DupValue (ctx, it->second.layer);
++        invoke (callback, layer);
++        JS_FreeValue (ctx, callback);
++        JS_FreeValue (ctx, layer);
+     }
+-}
+\ No newline at end of file
++    for (auto id : dueTimeouts) {
++        auto node = m_timeouts.extract (id);
++        if (node.empty ()) continue;
++        auto& timer = node.mapped ();
++        invoke (timer.callback, timer.layer);
++        JS_FreeValue (ctx, timer.callback);
++        JS_FreeValue (ctx, timer.layer);
++    }
++}
+diff --git a/src/WallpaperEngine/Scripting/EngineObject.h b/src/WallpaperEngine/Scripting/EngineObject.h
+index 521a2ff..c46a19b 100644
+--- a/src/WallpaperEngine/Scripting/EngineObject.h
++++ b/src/WallpaperEngine/Scripting/EngineObject.h
+@@ -23,15 +23,18 @@ public:
+     void clearTimeout (uint32_t id);
+     void clearInterval (uint32_t id);
+ 
++    JSValue registerAudioBuffers (int resolution);
+     void tick ();
+ 
+ protected:
+     struct Timeout {
+ 	JSValue callback;
++        JSValue layer;
+ 	std::chrono::milliseconds duration;
+ 	std::chrono::steady_clock::time_point next;
+     };
+ 
++    std::map<int, JSValue> m_audioBuffers;
+     uint32_t m_nextTimeoutId = 0;
+     uint32_t m_nextIntervalId = 0;
+     std::map<uint32_t, Timeout> m_intervals;
+diff --git a/src/WallpaperEngine/Scripting/Modules/ColorModule.cpp b/src/WallpaperEngine/Scripting/Modules/ColorModule.cpp
+index 09412df..0d42457 100644
+--- a/src/WallpaperEngine/Scripting/Modules/ColorModule.cpp
++++ b/src/WallpaperEngine/Scripting/Modules/ColorModule.cpp
+@@ -1,4 +1,5 @@
+ #include "ColorModule.h"
++#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
+ 
+ #include "WallpaperEngine/Scripting/ScriptEngine.h"
+ 
+@@ -10,28 +11,27 @@ using namespace WallpaperEngine::Scripting::Modules;
+ static uint32_t ColorModuleInstanceId = 0;
+ std::map<uint32_t, ColorModule&> colorModules;
+ 
+-int wecolor_init (JSContext* ctx, JSModuleDef* m) {
+-
+-    JS_AddModuleExport (ctx, m, "rgb2hsv");
+-    JS_AddModuleExport (ctx, m, "hsv2rgb");
+-    JS_AddModuleExport (ctx, m, "normalizeColor");
+-    JS_AddModuleExport (ctx, m, "expandColor");
+-
+-    return 0;
++int wecolor_init (JSContext* ctx, JSModuleDef* module) {
++    for (const auto& [id, instance] : colorModules) {
++        if (instance.getDefinition () == module) { instance.initializeExports (); return 0; }
++    }
++    JS_ThrowInternalError (ctx, "Module instance unavailable");
++    return -1;
+ }
+ 
+ JSValue wecolor_rgb2hsv (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+     if (argc != 1) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     if (JS_VALUE_GET_TAG (argv[0]) != JS_TAG_OBJECT) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     JSValue x = JS_GetPropertyStr (ctx, argv[0], "x");
+     JSValue y = JS_GetPropertyStr (ctx, argv[0], "y");
+     JSValue z = JS_GetPropertyStr (ctx, argv[0], "z");
++    WallpaperEngine::Data::Utils::ScopeGuard guard ([=] { JS_FreeValue (ctx, x); JS_FreeValue (ctx, y); JS_FreeValue (ctx, z); });
+ 
+     double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f;
+ 
+@@ -86,16 +86,17 @@ JSValue wecolor_rgb2hsv (JSContext* ctx, JSValueConst this_val, int argc, JSValu
+ 
+ JSValue wecolor_hsv2rgb (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+     if (argc != 1) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     if (JS_VALUE_GET_TAG (argv[0]) != JS_TAG_OBJECT) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     JSValue x = JS_GetPropertyStr (ctx, argv[0], "x");
+     JSValue y = JS_GetPropertyStr (ctx, argv[0], "y");
+     JSValue z = JS_GetPropertyStr (ctx, argv[0], "z");
++    WallpaperEngine::Data::Utils::ScopeGuard guard ([=] { JS_FreeValue (ctx, x); JS_FreeValue (ctx, y); JS_FreeValue (ctx, z); });
+ 
+     double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f;
+ 
+@@ -153,11 +154,11 @@ JSValue wecolor_hsv2rgb (JSContext* ctx, JSValueConst this_val, int argc, JSValu
+ 
+ JSValue wecolor_normalizecolor (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+     if (argc != 1) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     if (JS_VALUE_GET_TAG (argv[0]) != JS_TAG_OBJECT) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     const auto it = colorModules.find (magic);
+@@ -169,9 +170,10 @@ JSValue wecolor_normalizecolor (JSContext* ctx, JSValueConst this_val, int argc,
+     JSValue x = JS_GetPropertyStr (ctx, argv[0], "x");
+     JSValue y = JS_GetPropertyStr (ctx, argv[0], "y");
+     JSValue z = JS_GetPropertyStr (ctx, argv[0], "z");
++    WallpaperEngine::Data::Utils::ScopeGuard guard ([=] { JS_FreeValue (ctx, x); JS_FreeValue (ctx, y); JS_FreeValue (ctx, z); });
+ 
+     if (!JS_IsNumber (x) || !JS_IsNumber (y) || !JS_IsNumber (z)) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f;
+@@ -191,11 +193,11 @@ JSValue wecolor_normalizecolor (JSContext* ctx, JSValueConst this_val, int argc,
+ 
+ JSValue wecolor_expandcolor (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+     if (argc != 1) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     if (JS_VALUE_GET_TAG (argv[0]) != JS_TAG_OBJECT) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     const auto it = colorModules.find (magic);
+@@ -207,9 +209,10 @@ JSValue wecolor_expandcolor (JSContext* ctx, JSValueConst this_val, int argc, JS
+     JSValue x = JS_GetPropertyStr (ctx, argv[0], "x");
+     JSValue y = JS_GetPropertyStr (ctx, argv[0], "y");
+     JSValue z = JS_GetPropertyStr (ctx, argv[0], "z");
++    WallpaperEngine::Data::Utils::ScopeGuard guard ([=] { JS_FreeValue (ctx, x); JS_FreeValue (ctx, y); JS_FreeValue (ctx, z); });
+ 
+     if (!JS_IsNumber (x) || !JS_IsNumber (y) || !JS_IsNumber (z)) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f;
+@@ -230,6 +233,14 @@ JSValue wecolor_expandcolor (JSContext* ctx, JSValueConst this_val, int argc, JS
+ ColorModule::ColorModule (ScriptEngine& engine) : ScriptModule (engine, "WEColor", wecolor_init) {
+     this->m_instanceId = ++ColorModuleInstanceId;
+ 
++    JS_AddModuleExport (engine.getContext (), getDefinition (), "rgb2hsv");
++    JS_AddModuleExport (engine.getContext (), getDefinition (), "hsv2rgb");
++    JS_AddModuleExport (engine.getContext (), getDefinition (), "normalizeColor");
++    JS_AddModuleExport (engine.getContext (), getDefinition (), "expandColor");
++    colorModules.emplace (this->m_instanceId, *this);
++}
++
++void ColorModule::initializeExports () {
+     JS_SetModuleExport (
+ 	this->getEngine ().getContext (), this->getDefinition (), "rgb2hsv",
+ 	JS_NewCFunctionMagic (
+@@ -260,7 +271,6 @@ ColorModule::ColorModule (ScriptEngine& engine) : ScriptModule (engine, "WEColor
+ 	)
+     );
+ 
+-    colorModules.emplace (this->m_instanceId, *this);
+ }
+ 
+ ColorModule::~ColorModule () { colorModules.erase (this->m_instanceId); }
+\ No newline at end of file
+diff --git a/src/WallpaperEngine/Scripting/Modules/ColorModule.h b/src/WallpaperEngine/Scripting/Modules/ColorModule.h
+index 92e9e2c..ff0ddd8 100644
+--- a/src/WallpaperEngine/Scripting/Modules/ColorModule.h
++++ b/src/WallpaperEngine/Scripting/Modules/ColorModule.h
+@@ -9,6 +9,7 @@ class ColorModule : public ScriptModule {
+ public:
+     ColorModule (ScriptEngine& engine);
+     ~ColorModule () override;
++    void initializeExports ();
+ 
+ protected:
+     uint32_t m_instanceId;
+diff --git a/src/WallpaperEngine/Scripting/Modules/MathModule.cpp b/src/WallpaperEngine/Scripting/Modules/MathModule.cpp
+index b3f5a82..8ded6ad 100644
+--- a/src/WallpaperEngine/Scripting/Modules/MathModule.cpp
++++ b/src/WallpaperEngine/Scripting/Modules/MathModule.cpp
+@@ -10,23 +10,21 @@ using namespace WallpaperEngine::Scripting::Modules;
+ static uint32_t MathModuleInstanceId = 0;
+ std::map<uint32_t, MathModule&> mathModules;
+ 
+-int wemath_init (JSContext* ctx, JSModuleDef* m) {
+-
+-    JS_AddModuleExport (ctx, m, "smoothStep");
+-    JS_AddModuleExport (ctx, m, "mix");
+-    JS_AddModuleExport (ctx, m, "deg2rad");
+-    JS_AddModuleExport (ctx, m, "rad2deg");
+-
+-    return 0;
++int wemath_init (JSContext* ctx, JSModuleDef* module) {
++    for (const auto& [id, instance] : mathModules) {
++        if (instance.getDefinition () == module) { instance.initializeExports (); return 0; }
++    }
++    JS_ThrowInternalError (ctx, "Module instance unavailable");
++    return -1;
+ }
+ 
+ JSValue wemath_smoothstep (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+     if (argc != 3) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     if (!JS_IsNumber (argv[0]) || !JS_IsNumber (argv[1]) || !JS_IsNumber (argv[2])) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     double edge0 = 0.0f;
+@@ -42,11 +40,11 @@ JSValue wemath_smoothstep (JSContext* ctx, JSValueConst this_val, int argc, JSVa
+ 
+ JSValue wemath_mix (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+     if (argc != 3) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     if (!JS_IsNumber (argv[0]) || !JS_IsNumber (argv[1]) || !JS_IsNumber (argv[2])) {
+-	return JS_EXCEPTION;
++	return JS_ThrowTypeError (ctx, "Invalid module function arguments");
+     }
+ 
+     double a = 0.0f;
+@@ -63,6 +61,14 @@ JSValue wemath_mix (JSContext* ctx, JSValueConst this_val, int argc, JSValueCons
+ MathModule::MathModule (ScriptEngine& engine) : ScriptModule (engine, "WEMath", wemath_init) {
+     this->m_instanceId = ++MathModuleInstanceId;
+ 
++    JS_AddModuleExport (engine.getContext (), getDefinition (), "smoothStep");
++    JS_AddModuleExport (engine.getContext (), getDefinition (), "mix");
++    JS_AddModuleExport (engine.getContext (), getDefinition (), "deg2rad");
++    JS_AddModuleExport (engine.getContext (), getDefinition (), "rad2deg");
++    mathModules.emplace (this->m_instanceId, *this);
++}
++
++void MathModule::initializeExports () {
+     JS_SetModuleExport (
+ 	this->getEngine ().getContext (), this->getDefinition (), "smoothStep",
+ 	JS_NewCFunctionMagic (
+@@ -88,7 +94,6 @@ MathModule::MathModule (ScriptEngine& engine) : ScriptModule (engine, "WEMath",
+ 	JS_NewFloat64 (this->getEngine ().getContext (), 57.295779513082320876798154814105)
+     );
+ 
+-    mathModules.emplace (this->m_instanceId, *this);
+ }
+ 
+ MathModule::~MathModule () { mathModules.erase (this->m_instanceId); }
+\ No newline at end of file
+diff --git a/src/WallpaperEngine/Scripting/Modules/MathModule.h b/src/WallpaperEngine/Scripting/Modules/MathModule.h
+index 11b8d86..ba8b8c8 100644
+--- a/src/WallpaperEngine/Scripting/Modules/MathModule.h
++++ b/src/WallpaperEngine/Scripting/Modules/MathModule.h
+@@ -9,6 +9,7 @@ class MathModule : public ScriptModule {
+ public:
+     MathModule (ScriptEngine& engine);
+     ~MathModule () override;
++    void initializeExports ();
+ 
+ protected:
+     uint32_t m_instanceId;
+diff --git a/src/WallpaperEngine/Scripting/SceneObject.cpp b/src/WallpaperEngine/Scripting/SceneObject.cpp
+index 8972ba0..1354bc8 100644
+--- a/src/WallpaperEngine/Scripting/SceneObject.cpp
++++ b/src/WallpaperEngine/Scripting/SceneObject.cpp
+@@ -147,7 +147,8 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
+ 
+ 	JS_ToInt32 (ctx, &id, layer);
+ 
+-	auto* object = container->getScene ().getObject (id);
++	const auto& layers = container->getScene ().getObjectsByRenderOrder ();
++        auto* object = id >= 0 && static_cast<size_t> (id) < layers.size () ? layers[id] : nullptr;
+ 
+ 	if (object == nullptr) {
+ 	    return JS_UNDEFINED;
+@@ -187,6 +188,82 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
+     return JS_EXCEPTION;
+ }
+ 
++JSValue scene_create_layer (JSContext* ctx, JSValueConst self, int argc, JSValueConst* argv) {
++    if (argc != 1) return JS_ThrowTypeError (ctx, "createLayer requires an image model or config");
++    auto* container = get_opaque (self);
++    JSValue pathValue = JS_IsString (argv[0]) ? JS_DupValue (ctx, argv[0]) : JS_GetPropertyStr (ctx, argv[0], "image");
++    if (!JS_IsString (pathValue)) { JS_FreeValue (ctx, pathValue); return JS_ThrowTypeError (ctx, "Dynamic layers currently require an image model"); }
++    const char* path = JS_ToCString (ctx, pathValue);
++    JS_FreeValue (ctx, pathValue);
++    if (!path) return JS_EXCEPTION;
++    ScopeGuard guard ([=] { JS_FreeCString (ctx, path); });
++    try {
++        std::string config;
++        if (!JS_IsString (argv[0])) {
++            JSValue json = JS_JSONStringify (ctx, argv[0], JS_UNDEFINED, JS_UNDEFINED);
++            const char* text = JS_ToCString (ctx, json);
++            if (text) config = text;
++            JS_FreeCString (ctx, text);
++            JS_FreeValue (ctx, json);
++        }
++        auto* layer = container->getScene ().createImageLayer (path, config);
++        return container->getEngine ().getAdapters ().object->instantiate (*layer->as<ScriptableObject> ());
++    } catch (const std::exception& e) { return JS_ThrowInternalError (ctx, "%s", e.what ()); }
++}
++
++JSValue scene_layer_index (JSContext* ctx, JSValueConst self, int argc, JSValueConst* argv) {
++    auto* container = get_opaque (self);
++    auto* object = argc == 1 ? container->getEngine ().getAdapters ().object->unwrap (argv[0]) : nullptr;
++    if (!object) return JS_ThrowTypeError (ctx, "getLayerIndex requires a layer");
++    return JS_NewInt32 (ctx, container->getScene ().layerIndex (object->getId ()));
++}
++
++JSValue scene_sort_layer (JSContext* ctx, JSValueConst self, int argc, JSValueConst* argv) {
++    auto* container = get_opaque (self);
++    auto* object = argc == 2 ? container->getEngine ().getAdapters ().object->unwrap (argv[0]) : nullptr;
++    int index;
++    if (!object || JS_ToInt32 (ctx, &index, argv[1]) < 0) return JS_ThrowTypeError (ctx, "sortLayer requires a layer and index");
++    container->getScene ().sortLayer (object->getId (), index);
++    return JS_TRUE;
++}
++
++JSValue scene_layer_count (JSContext* ctx, JSValueConst self, int, JSValueConst*) {
++    return JS_NewInt32 (ctx, get_opaque (self)->getScene ().getObjectsByRenderOrder ().size ());
++}
++
++JSValue scene_enumerate_layers (JSContext* ctx, JSValueConst self, int, JSValueConst*) {
++    auto* container = get_opaque (self);
++    JSValue array = JS_NewArray (ctx);
++    int index = 0;
++    for (auto* layer : container->getScene ().getObjectsByRenderOrder ()) {
++        JSValue value = layer->is<ScriptableObject> ()
++            ? container->getEngine ().getAdapters ().object->instantiate (*layer->as<ScriptableObject> ()) : JS_NewObject (ctx);
++        if (!layer->is<ScriptableObject> ()) {
++            JS_SetPropertyStr (ctx, value, "name", JS_NewString (ctx, layer->getObject ().name.c_str ()));
++            JS_SetPropertyStr (ctx, value, "id", JS_NewInt32 (ctx, layer->getId ()));
++        }
++        JS_SetPropertyUint32 (ctx, array, index++, value);
++    }
++    return array;
++}
++
++JSValue scene_initial_config (JSContext* ctx, JSValueConst self, int argc, JSValueConst* argv) {
++    auto* container = get_opaque (self);
++    if (argc != 1) return JS_ThrowTypeError (ctx, "getInitialLayerConfig requires a layer");
++    auto* layer = container->getEngine ().getAdapters ().object->unwrap (argv[0]);
++    if (!layer) return JS_ThrowTypeError (ctx, "getInitialLayerConfig requires a layer reference");
++    try {
++        const auto& scene = container->getScene ().getScene ();
++        const auto data = WallpaperEngine::Data::JSON::JSON::parse (container->getScene ().getAssetLocator ().readString (scene.filename));
++        for (const auto& object : data.at ("objects")) {
++            if (object.at ("id").get<int> () != layer->getId ()) continue;
++            const auto json = object.dump ();
++            return JS_ParseJSON (ctx, json.c_str (), json.size (), "<initial-layer-config>");
++        }
++    } catch (const std::exception& e) { return JS_ThrowInternalError (ctx, "%s", e.what ()); }
++    return JS_UNDEFINED;
++}
++
+ JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
+ 
+ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
+@@ -198,6 +275,12 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
+ 
+     JS_DupValue (this->m_engine.getContext (), this->m_instance);
+ 
++    JS_SetPropertyStr (engine.getContext (), m_instance, "createLayer", JS_NewCFunction (engine.getContext (), scene_create_layer, "createLayer", 1));
++    JS_SetPropertyStr (engine.getContext (), m_instance, "getLayerIndex", JS_NewCFunction (engine.getContext (), scene_layer_index, "getLayerIndex", 1));
++    JS_SetPropertyStr (engine.getContext (), m_instance, "sortLayer", JS_NewCFunction (engine.getContext (), scene_sort_layer, "sortLayer", 2));
++    JS_SetPropertyStr (engine.getContext (), m_instance, "getLayerCount", JS_NewCFunction (engine.getContext (), scene_layer_count, "getLayerCount", 0));
++    JS_SetPropertyStr (engine.getContext (), m_instance, "enumerateLayers", JS_NewCFunction (engine.getContext (), scene_enumerate_layers, "enumerateLayers", 0));
++    JS_SetPropertyStr (engine.getContext (), m_instance, "getInitialLayerConfig", JS_NewCFunction (engine.getContext (), scene_initial_config, "getInitialLayerConfig", 1));
+     // set properties
+     JS_SetOpaque (this->m_instance, this);
+     JS_DefinePropertyGetSet (
+diff --git a/src/WallpaperEngine/Scripting/SceneObject.h b/src/WallpaperEngine/Scripting/SceneObject.h
+index 60ab9d6..a022c43 100644
+--- a/src/WallpaperEngine/Scripting/SceneObject.h
++++ b/src/WallpaperEngine/Scripting/SceneObject.h
+@@ -11,7 +11,7 @@ public:
+     SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene);
+     ~SceneObject ();
+ 
+-    const Render::Wallpapers::CScene& getScene () const { return m_scene; }
++    Render::Wallpapers::CScene& getScene () const { return m_scene; }
+     JSValue getInstance () const { return m_instance; }
+     ScriptEngine& getEngine () const { return m_engine; }
+ 
+diff --git a/src/WallpaperEngine/Scripting/ScriptEngine.cpp b/src/WallpaperEngine/Scripting/ScriptEngine.cpp
+index e690b92..f121c79 100644
+--- a/src/WallpaperEngine/Scripting/ScriptEngine.cpp
++++ b/src/WallpaperEngine/Scripting/ScriptEngine.cpp
+@@ -76,11 +76,26 @@ JSModuleDef* scriptengine_module_loader (JSContext* ctx, const char* module, voi
+     const auto& modules = scriptEngine->getModules ();
+     const auto it = modules.find (module);
+ 
+-    if (it == modules.end ()) {
+-	return nullptr;
+-    }
+-
+-    return it->second->getDefinition ();
++    if (it != modules.end ()) return it->second->getDefinition ();
++    std::string source;
++    if (std::string (module) == "WEVector") {
++        source = R"JS(
++export function angleVector2(angle) {
++    const radians = angle * Math.PI / 180;
++    return new Vec2(Math.cos(radians), Math.sin(radians));
++}
++export function vectorAngle2(direction) { return Math.atan2(direction.y, direction.x) * 180 / Math.PI; }
++)JS";
++    } else {
++        try { source = scriptEngine->getScene ().getAssetLocator ().readString (module); }
++        catch (const std::exception&) { JS_ThrowReferenceError (ctx, "Cannot load SceneScript module '%s'", module); return nullptr; }
++    }
++    JSValue compiled = JS_Eval (ctx, source.c_str (), source.size (), module,
++                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
++    if (JS_IsException (compiled)) return nullptr;
++    auto* definition = static_cast<JSModuleDef*> (JS_VALUE_GET_PTR (compiled));
++    JS_FreeValue (ctx, compiled);
++    return definition;
+ }
+ 
+ JSValue ScriptEngine::dynamicToJs (DynamicValue& value) const {
+@@ -106,7 +121,7 @@ JSValue ScriptEngine::dynamicToJs (DynamicValue& value) const {
+     }
+ }
+ 
+-static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source) {
++void WallpaperEngine::Scripting::jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source) {
+     if (JS_IsException (val)) {
+ 	return;
+     }
+@@ -115,7 +130,6 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
+     int tag = JS_VALUE_GET_TAG (val);
+ 
+     if (tag == JS_TAG_UNDEFINED || tag == JS_TAG_UNINITIALIZED || tag == JS_TAG_NULL) {
+-	source.update (DynamicValue::UpdateSource::Script);
+ 	return;
+     }
+ 
+@@ -135,7 +149,7 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
+ 
+     if (tag == JS_TAG_STRING) {
+ 	const char* str = JS_ToCString (ctx, val);
+-	source.update (str == nullptr ? "" : str, DynamicValue::UpdateSource::Script);
++	source.update (std::string (str == nullptr ? "" : str), DynamicValue::UpdateSource::Script);
+ 	JS_FreeCString (ctx, str);
+ 	return;
+     }
+@@ -153,7 +167,7 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
+ 	    JS_FreeValue (ctx, w);
+ 	});
+ 
+-	if (!JS_IsNumber (x) || JS_IsNumber (y)) {
++	if (!JS_IsNumber (x) || !JS_IsNumber (y)) {
+ 	    sLog.exception ("Vector's x and y components must be numbers");
+ 	}
+ 
+@@ -167,11 +181,13 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
+ 	    return;
+ 	}
+ 
++	JS_ToFloat64 (ctx, &zVal, z);
+ 	if (!JS_IsNumber (w)) {
+ 	    source.update (glm::vec3 (xVal, yVal, zVal), DynamicValue::UpdateSource::Script);
+ 	    return;
+ 	}
+ 
++	JS_ToFloat64 (ctx, &wVal, w);
+ 	source.update (glm::vec4 (xVal, yVal, zVal, wVal), DynamicValue::UpdateSource::Script);
+     }
+ }
+@@ -249,7 +265,9 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
+ }
+ 
+ ScriptEngine::~ScriptEngine () {
++    this->shutdown ();
+     this->m_unregisterMediaUpdateCallback ();
++    this->m_unregisterAlbumArtUpdateCallback ();
+ 
+     for (const auto& module : this->m_scriptModules | std::views::values) {
+ 	JS_FreeValue (this->m_context, module.module);
+@@ -288,6 +306,15 @@ static void logJSException (JSContext* ctx, const char* context) {
+ 	    JS_FreeCString (ctx, str);
+ 	}
+     }
++    if (JS_IsObject (exc)) {
++        JSValue stack = JS_GetPropertyStr (ctx, exc, "stack");
++        if (JS_IsString (stack)) {
++            const char* text = JS_ToCString (ctx, stack);
++            if (text) sLog.error (text);
++            JS_FreeCString (ctx, text);
++        }
++        JS_FreeValue (ctx, stack);
++    }
+     JS_FreeValue (ctx, exc);
+ }
+ 
+@@ -565,6 +592,7 @@ JSValue ScriptEngine::call (JSValue module, int argc, JSValue argv[], const char
+ }
+ 
+ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject& object) {
++    if (m_shuttingDown) return;
+     const auto source = currentValue.getScriptSource ();
+ 
+     if (!source.has_value ()) {
+@@ -577,65 +605,90 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
+ 	return;
+     }
+ 
+-    // load the script and store it
+-    JSValue module = JS_Eval (this->m_context, source->c_str (), source->size (), key.c_str (), JS_EVAL_TYPE_MODULE);
+-
+-    auto inserted = this->m_scriptModules.emplace (
+-	key,
+-	LoadedModule {
+-	    .value = currentValue,
+-	    .module = module,
+-	}
++    this->m_scriptModules.emplace (
++        key, LoadedModule { .value = currentValue, .module = JS_UNDEFINED, .source = *source, .object = &object }
+     );
++    this->m_scriptOrder.push_back (key);
++}
+ 
+-    if (!inserted.second) {
+-	return;
+-    }
+-
+-    JS_SetPropertyStr (this->m_context, this->m_globalThis, "thisLayer", this->m_adapters.object->instantiate (object));
+-
+-    // script properties do not need update as they're connected directly to the source data
+-    this->m_runningModule = &inserted.first->second;
+-
+-    // check if there's an update method and run it
+-    JSValue args[] = { this->dynamicToJs (currentValue) };
+-    JSValue result = this->call (module, 1, args, "update");
+-
+-    ScopeGuard guard2 ([this, args, result] () {
+-	JS_FreeValue (this->m_context, result);
+-	JS_FreeValue (this->m_context, args[0]);
+-    });
+-
+-    if (JS_IsException (result)) {
+-	return;
+-    }
++void ScriptEngine::loadScripts () {
++    // Evaluate after the scene graph is complete, so top-level getLayer calls can resolve siblings.
++    for (size_t i = 0; i < m_scriptOrder.size (); ++i) {
++        const auto key = m_scriptOrder[i];
++        auto& module = m_scriptModules.at (key);
++        if (module.loaded) continue;
++        module.loaded = true;
++        m_runningModule = &module;
++        JS_SetPropertyStr (m_context, m_globalThis, "thisLayer", m_adapters.object->instantiate (*module.object));
++        JSValue compiled = JS_Eval (m_context, module.source.c_str (), module.source.size (), key.c_str (),
++                                   JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
++        if (!JS_IsException (compiled)) {
++            auto* definition = static_cast<JSModuleDef*> (JS_VALUE_GET_PTR (compiled));
++            JSValue result = JS_EvalFunction (m_context, JS_DupValue (m_context, compiled));
++            if (JS_PromiseState (m_context, result) == JS_PROMISE_REJECTED) {
++                JS_Throw (m_context, JS_PromiseResult (m_context, result));
++                logJSException (m_context, "property script evaluation");
++            } else if (!JS_IsException (result)) module.module = JS_GetModuleNamespace (m_context, definition);
++            else logJSException (m_context, "property script");
++            JS_FreeValue (m_context, result);
++        } else logJSException (m_context, "property script compile");
++        JS_FreeValue (m_context, compiled);
++    }
++    m_runningModule = nullptr;
++}
+ 
+-    jsToDynamicValue (this->m_context, result, currentValue);
++void ScriptEngine::shutdown () {
++    if (m_shuttingDown) return;
++    m_shuttingDown = true;
++    for (auto it = m_scriptOrder.rbegin (); it != m_scriptOrder.rend (); ++it) {
++        auto& module = m_scriptModules.at (*it);
++        if (JS_IsUndefined (module.module) || !module.initialized) continue;
++        m_runningModule = &module;
++        JS_SetPropertyStr (m_context, m_globalThis, "thisLayer", m_adapters.object->instantiate (*module.object));
++        JSValue result = this->call (module.module, 0, nullptr, "destroy");
++        if (JS_IsException (result)) logJSException (m_context, "property destroy");
++        JS_FreeValue (m_context, result);
++    }
++    m_runningModule = nullptr;
+ }
+ 
+ void ScriptEngine::tick () {
+-    // run intervals
+-    this->m_engineObject->tick ();
+-
+-    // run any pending notifications
+-
+-    // run all update methods
+-    for (auto& module : this->m_scriptModules | std::views::values) {
+-	this->m_runningModule = &module;
+-
+-	JSValue args[] = { this->dynamicToJs (module.value) };
+-	JSValue result = this->call (module.module, 1, args, "update");
+-	ScopeGuard guard ([result, args, this] () {
+-	    JS_FreeValue (this->m_context, result);
+-	    JS_FreeValue (this->m_context, args[0]);
+-	});
+-
+-	if (JS_IsException (result)) {
+-	    continue;
+-	}
+-
+-	jsToDynamicValue (this->m_context, result, module.value);
++    this->loadScripts ();
++
++    // Initialize in dependency/creation order before any property updates.
++    for (size_t i = 0; i < this->m_scriptOrder.size (); ++i) {
++        auto& module = this->m_scriptModules.at (this->m_scriptOrder[i]);
++        if (JS_IsUndefined (module.module) || module.initialized) continue;
++        this->m_runningModule = &module;
++        JS_SetPropertyStr (this->m_context, this->m_globalThis, "thisLayer", this->m_adapters.object->instantiate (*module.object));
++        module.initialized = true;
++        JSValue properties = JS_GetPropertyStr (m_context, m_engineObject->getInstance (), "userProperties");
++        JSValue applied = this->call (module.module, 1, &properties, "applyUserProperties");
++        if (JS_IsException (applied)) logJSException (m_context, "applyUserProperties");
++        JS_FreeValue (m_context, properties);
++        JS_FreeValue (m_context, applied);
++        JSValue argument = this->dynamicToJs (module.value);
++        JSValue result = this->call (module.module, 1, &argument, "init");
++        if (JS_IsException (result)) logJSException (this->m_context, "property init");
++        else jsToDynamicValue (this->m_context, result, module.value);
++        JS_FreeValue (this->m_context, argument);
++        JS_FreeValue (this->m_context, result);
+     }
++    this->m_engineObject->tick ();
++    const size_t count = this->m_scriptOrder.size ();
++    for (size_t i = 0; i < count; ++i) {
++        auto& module = this->m_scriptModules.at (this->m_scriptOrder[i]);
++        if (JS_IsUndefined (module.module) || !module.initialized) continue;
++        this->m_runningModule = &module;
++        JS_SetPropertyStr (this->m_context, this->m_globalThis, "thisLayer", this->m_adapters.object->instantiate (*module.object));
++        JSValue argument = this->dynamicToJs (module.value);
++        JSValue result = this->call (module.module, 1, &argument, "update");
++        if (JS_IsException (result)) logJSException (this->m_context, "property update");
++        else jsToDynamicValue (this->m_context, result, module.value);
++        JS_FreeValue (this->m_context, argument);
++        JS_FreeValue (this->m_context, result);
++    }
++    this->m_runningModule = nullptr;
+ }
+ 
+ void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media) {
+diff --git a/src/WallpaperEngine/Scripting/ScriptEngine.h b/src/WallpaperEngine/Scripting/ScriptEngine.h
+index 8fba5b7..7913b8d 100644
+--- a/src/WallpaperEngine/Scripting/ScriptEngine.h
++++ b/src/WallpaperEngine/Scripting/ScriptEngine.h
+@@ -32,6 +32,7 @@ class CScene;
+ }
+ 
+ namespace WallpaperEngine::Scripting {
++void jsToDynamicValue (JSContext* ctx, JSValue val, Data::Model::DynamicValue& source);
+ class ScriptPropertiesObject;
+ namespace Adapters {
+     class ScriptableObjectAdapter;
+@@ -47,6 +48,10 @@ public:
+     struct LoadedModule {
+ 	DynamicValue& value;
+ 	JSValue module;
++        std::string source;
++        ScriptableObject* object = nullptr;
++        bool initialized = false;
++        bool loaded = false;
+     };
+     struct JSObjectAdapters {
+ 	std::unique_ptr<Adapters::VectorAdapter<4>> vec4;
+@@ -80,6 +85,7 @@ public:
+      * timeouts, intervals AND calls any update() functions.
+      */
+     void tick ();
++    void shutdown ();
+ 
+     // -------------------------------------------------------------------
+     // Layer-script API (Phase 2 — dynamic text)
+@@ -142,6 +148,7 @@ private:
+     JSValue call (JSValue module, int argc, JSValueConst argv[], const char* name);
+ 
+     void installBuiltins ();
++    void loadScripts ();
+ 
+     void notifyMediaUpdate (const Media::MediaSource::MediaInfo& media);
+ 
+@@ -160,6 +167,7 @@ private:
+ 
+     std::map<std::string, std::unique_ptr<Modules::ScriptModule>> m_modules = {};
+     std::map<std::string, LoadedModule> m_scriptModules = {};
++    std::vector<std::string> m_scriptOrder;
+ 
+     LoadedModule* m_runningModule = nullptr;
+ 
+@@ -167,6 +175,7 @@ private:
+     bool m_layerRegistryReady = false;
+     std::map<ScriptLayerHandle, bool> m_layerInitialized;
+     bool m_builtinsInstalled = false;
++    bool m_shuttingDown = false;
+     Media::MediaSource& m_mediaSource;
+     std::function<void ()> m_unregisterMediaUpdateCallback;
+     std::function<void ()> m_unregisterAlbumArtUpdateCallback;
+diff --git a/src/WallpaperEngine/Scripting/ScriptPropertiesObject.cpp b/src/WallpaperEngine/Scripting/ScriptPropertiesObject.cpp
+index f25e788..a79ccf9 100644
+--- a/src/WallpaperEngine/Scripting/ScriptPropertiesObject.cpp
++++ b/src/WallpaperEngine/Scripting/ScriptPropertiesObject.cpp
+@@ -55,31 +55,41 @@ int scriptproperties_property_set (
+ }
+ 
+ JSValue scriptpropertiescreator_add (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+-    // no need to do anything, any add call should just return itself
+-    // we'll set them either way as what comes in the DynamicValue
+-    // TODO: PROPERLY IMPLEMENT THIS CHAIN AT SOME POINT
+-    return this_val;
++    if (argc > 0 && JS_IsObject (argv[0])) {
++        JSValue defaults = JS_GetPropertyStr (ctx, this_val, "__defaults");
++        JSValue name = JS_GetPropertyStr (ctx, argv[0], "name");
++        JSValue value = JS_GetPropertyStr (ctx, argv[0], "value");
++        if (JS_IsUndefined (value)) {
++            JSValue options = JS_GetPropertyStr (ctx, argv[0], "options");
++            if (JS_IsArray (options)) {
++                JSValue first = JS_GetPropertyUint32 (ctx, options, 0);
++                JS_FreeValue (ctx, value);
++                value = JS_GetPropertyStr (ctx, first, "value");
++                JS_FreeValue (ctx, first);
++            }
++            JS_FreeValue (ctx, options);
++        }
++        const char* key = JS_ToCString (ctx, name);
++        if (key && JS_IsObject (defaults)) JS_SetPropertyStr (ctx, defaults, key, JS_DupValue (ctx, value));
++        JS_FreeCString (ctx, key);
++        JS_FreeValue (ctx, defaults);
++        JS_FreeValue (ctx, name);
++        JS_FreeValue (ctx, value);
++    }
++    return JS_DupValue (ctx, this_val);
+ }
+ 
+ JSValue scriptpropertiescreator_finish (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+     JSClassID classId = 0;
+     const auto container = static_cast<OpaqueScriptProperties*> (JS_GetAnyOpaque (this_val, &classId));
+ 
+-    // get all the properties and set the right values
++    JSValue result = JS_GetPropertyStr (ctx, this_val, "__defaults");
++    if (!JS_IsObject (result)) { JS_FreeValue (ctx, result); result = JS_NewObject (ctx); }
+     const auto* module = container->object.getEngine ().getRunningModule ();
+-
+-    if (module == nullptr) {
+-	return JS_UNDEFINED;
++    if (module) {
++        for (auto& [name, setting] : module->value.getProperties ())
++            JS_SetPropertyStr (ctx, result, name.c_str (), container->object.getEngine ().dynamicToJs (*setting->value));
+     }
+-
+-    // create a new object based off the properties in the dynamic value and call it a day
+-    JSValue result = JS_NewObjectClass (ctx, container->object.getPropertiesClassId ());
+-    JS_SetOpaque (
+-	result,
+-	new OpaqueScriptPropertiesInstance { .object = container->object,
+-					     .value = container->object.getEngine ().getRunningModule ()->value }
+-    );
+-
+     return result;
+ }
+ 
+@@ -104,6 +114,7 @@ scriptpropertiescreator_create (JSContext* ctx, JSValueConst this_val, int argc,
+     }
+ 
+     JSValue creator = JS_NewObjectClass (ctx, instance->second.getCreatorClassId ());
++    JS_SetPropertyStr (ctx, creator, "__defaults", JS_NewObject (ctx));
+ 
+     // setup the current script properties creator
+     JS_SetOpaque (creator, new OpaqueScriptProperties { .object = instance->second });
+@@ -169,7 +180,7 @@ ScriptPropertiesObject::ScriptPropertiesObject (ScriptEngine& engine, Render::Wa
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), this->m_engine.getGlobalThis (), "createScriptProperties",
+ 	JS_NewCFunctionMagic (
+-	    this->m_engine.getContext (), scriptpropertiescreator_create, "createScriptProperties", 0, JS_CFUNC_generic,
++	    this->m_engine.getContext (), scriptpropertiescreator_create, "createScriptProperties", 0, JS_CFUNC_generic_magic,
+ 	    m_instanceId
+ 	),
+ 	JS_PROP_ENUMERABLE
+@@ -180,6 +191,7 @@ ScriptPropertiesObject::ScriptPropertiesObject (ScriptEngine& engine, Render::Wa
+ }
+ 
+ ScriptPropertiesObject::~ScriptPropertiesObject () {
++    scriptPropertiesObjectInstances.erase (this->m_instanceId);
+     JS_FreeValue (this->m_engine.getContext (), this->m_creatorPrototype);
+     JS_FreeValue (this->m_engine.getContext (), this->m_propertiesPrototype);
+ }
+\ No newline at end of file
+diff --git a/src/WallpaperEngine/Scripting/ScriptableObject.cpp b/src/WallpaperEngine/Scripting/ScriptableObject.cpp
+index bfd4be8..8e21d2e 100644
+--- a/src/WallpaperEngine/Scripting/ScriptableObject.cpp
++++ b/src/WallpaperEngine/Scripting/ScriptableObject.cpp
+@@ -11,11 +11,16 @@ using namespace WallpaperEngine::Scripting;
+ ScriptableObject::ScriptableObject (Wallpapers::CScene& scene, const Object& object) : CObject (scene, object) {
+     // register common dynamic values
+     this->registerProperty ("origin", *object.origin->value);
++    if (object.is<Image> () || object.is<Text> ()) return;
+     this->registerProperty ("scale", *object.groupScale->value);
+     this->registerProperty ("angles", *object.groupAngles->value);
+     this->registerProperty ("visible", *object.groupVisible->value);
+ }
+ 
++ScriptableObject::~ScriptableObject () {
++    for (auto& disconnect : m_disconnectors) disconnect ();
++}
++
+ DynamicValue& ScriptableObject::getProperty (const std::string& name) {
+     const auto it = this->m_properties.find (name);
+ 
+@@ -31,8 +36,30 @@ const std::map<std::string, ScriptableObject::PropertyEntry>& ScriptableObject::
+ }
+ 
+ void ScriptableObject::registerProperty (const std::string& name, DynamicValue& value) {
++    DynamicValue* scriptValue = &value;
++    if (name == "angles") {
++        auto degrees = std::make_unique<DynamicValue> (glm::degrees (value.getVec3 ()));
++        if (value.getScriptSource ()) degrees->setScriptSource (*value.getScriptSource ());
++        degrees->setProperties (std::move (value.getProperties ()));
++        auto* target = degrees.get ();
++        auto updating = std::make_shared<bool> (false);
++        m_disconnectors.push_back (target->listen ([&value, updating] (const DynamicValue& current, DynamicValue::UpdateSource source) {
++            if (*updating) return;
++            *updating = true;
++            value.update (glm::radians (current.getVec3 ()), source);
++            *updating = false;
++        }));
++        m_disconnectors.push_back (value.listen ([target, updating] (const DynamicValue& current, DynamicValue::UpdateSource source) {
++            if (*updating) return;
++            *updating = true;
++            target->update (glm::degrees (current.getVec3 ()), source);
++            *updating = false;
++        }));
++        scriptValue = target;
++        m_scriptValues.push_back (std::move (degrees));
++    }
+     auto inserted = this->m_properties.emplace (
+-	name, PropertyEntry { .key = name + "_" + std::to_string (this->getId ()), .value = value }
++	name, PropertyEntry { .key = name + "_" + std::to_string (this->getId ()), .value = *scriptValue }
+     );
+ 
+     if (!inserted.second) {
+diff --git a/src/WallpaperEngine/Scripting/ScriptableObject.h b/src/WallpaperEngine/Scripting/ScriptableObject.h
+index 3d65893..496108e 100644
+--- a/src/WallpaperEngine/Scripting/ScriptableObject.h
++++ b/src/WallpaperEngine/Scripting/ScriptableObject.h
+@@ -15,7 +15,7 @@ public:
+     };
+ 
+     ScriptableObject (Wallpapers::CScene& scene, const Object& object);
+-    virtual ~ScriptableObject () = default;
++    virtual ~ScriptableObject ();
+ 
+     DynamicValue& getProperty (const std::string& name);
+ 
+@@ -26,5 +26,7 @@ protected:
+ 
+ private:
+     std::map<std::string, PropertyEntry> m_properties;
++    std::vector<std::unique_ptr<DynamicValue>> m_scriptValues;
++    std::vector<std::function<void ()>> m_disconnectors;
+ };
+ }
+\ No newline at end of file
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/Spectrum.h b/src/WallpaperEngine/Audio/Drivers/Recorders/Spectrum.h
+new file mode 100644
+index 0000000..a02faa8
+--- /dev/null
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/Spectrum.h
+@@ -0,0 +1,25 @@
++#pragma once
++#include <algorithm>
++#include <cmath>
++#include <iterator>
++
++namespace WallpaperEngine::Audio::Drivers::Recorders {
++// 64 logarithmic bands spanning 20 Hz to min(20 kHz, Nyquist).
++// Each positive FFT bin belongs to exactly one band. DC is excluded.
++// The FFT must use a Hann window; 4/N restores a full-scale sine's amplitude.
++template <typename Complex>
++void spectrumPowers (const Complex* fft, int samples, float rate, float (&powers)[64]) {
++    std::fill (std::begin (powers), std::end (powers), 0.0f);
++    const float high = std::min (20000.0f, rate * 0.5f);
++    if (samples < 2 || high <= 20.0f) return;
++    const float logRange = std::log (high / 20.0f);
++    const float normalization = 16.0f / (samples * static_cast<float> (samples));
++    for (int bin = 1; bin <= samples / 2; ++bin) {
++        const float frequency = bin * rate / samples;
++        if (frequency < 20.0f || frequency > high) continue;
++        const int band = std::clamp (static_cast<int> (64 * std::log (frequency / 20.0f) / logRange), 0, 63);
++        const float power = (fft[bin].r * fft[bin].r + fft[bin].i * fft[bin].i) * normalization;
++        if (std::isfinite (power)) powers[band] = std::max (powers[band], power);
++    }
++}
++} // namespace WallpaperEngine::Audio::Drivers::Recorders

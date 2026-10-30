@@ -27,7 +27,7 @@ def _targets() -> list[Path]:
 
 
 def _entry() -> str:
-    launcher = str(ROOT / "wpe-gui.sh")
+    launcher = os.environ.get("APPIMAGE") or str(ROOT / "wpe-gui.sh")
     if any(c in launcher for c in ' "\\'):
         launcher = '"' + launcher.replace("\\", "\\\\").replace('"', '\\"') + '"'
     return "\n".join([

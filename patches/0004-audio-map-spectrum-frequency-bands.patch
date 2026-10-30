@@ -1,0 +1,221 @@
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+@@ -1,4 +1,6 @@
+ #include "PulseAudioPlaybackRecorder.h"
++#include "Spectrum.h"
++#include <iterator>
+ #include "WallpaperEngine/Logging/Log.h"
+ #include <cmath>
+ #include <cstring>
+@@ -50,44 +52,18 @@
+ 	    return;
+ 	}
+     } else if (currentSize > 0 && data) {
+-	const size_t dataToCopy = std::min (currentSize, WAVE_BUFFER_SIZE - recorder->currentWritePointer);
+-
+-	// depending on the amount of data available, we might want to read one or multiple frames
+-	const size_t end = recorder->currentWritePointer + dataToCopy;
+-
+-	// this packet will fill the buffer, perform some extra checks for extra full buffers and get the latest one
+-	if (end == WAVE_BUFFER_SIZE) {
+-	    if (const size_t numberOfFullBuffers = (currentSize - dataToCopy) / WAVE_BUFFER_SIZE;
+-		numberOfFullBuffers > 0) {
+-		// calculate the start of the last block (we need the end of the previous block, hence the - 1)
+-		const size_t startOfLastBuffer = std::max (
+-		    dataToCopy + (numberOfFullBuffers - 1) * WAVE_BUFFER_SIZE, currentSize - WAVE_BUFFER_SIZE
+-		);
+-		// copy directly into the final buffer
+-		memcpy (recorder->audioBuffer, &data[startOfLastBuffer], WAVE_BUFFER_SIZE * sizeof (uint8_t));
+-		// copy whatever is left to the read/write buffer
+-		recorder->currentWritePointer = currentSize - startOfLastBuffer - WAVE_BUFFER_SIZE;
+-		memcpy (
+-		    recorder->audioBufferTmp, &data[startOfLastBuffer + WAVE_BUFFER_SIZE],
+-		    recorder->currentWritePointer * sizeof (uint8_t)
+-		);
+-	    } else {
+-		// okay, no full extra packets available, copy the rest of the data and flip the buffers
+-		memcpy (&recorder->audioBufferTmp[recorder->currentWritePointer], data, dataToCopy * sizeof (uint8_t));
+-		uint8_t* tmp = recorder->audioBuffer;
+-		recorder->audioBuffer = recorder->audioBufferTmp;
+-		recorder->audioBufferTmp = tmp;
+-		// reset write pointer
+-		recorder->currentWritePointer = 0;
+-	    }
+-
+-	    // signal a new frame is ready
+-	    recorder->fullFrameReady = true;
+-	} else {
+-	    // copy over available data to the tmp buffer and everything should be set
+-	    memcpy (&recorder->audioBufferTmp[recorder->currentWritePointer], data, dataToCopy * sizeof (uint8_t));
+-	    recorder->currentWritePointer += dataToCopy;
+-	}
++        size_t offset = 0;
++        while (offset < currentSize) {
++            const size_t count = std::min (currentSize - offset, WAVE_BUFFER_SIZE - recorder->currentWritePointer);
++            memcpy (recorder->audioBufferTmp + recorder->currentWritePointer, data + offset, count);
++            recorder->currentWritePointer += count;
++            offset += count;
++            if (recorder->currentWritePointer == WAVE_BUFFER_SIZE) {
++                std::swap (recorder->audioBuffer, recorder->audioBufferTmp);
++                recorder->currentWritePointer = 0;
++                recorder->fullFrameReady = true;
++            }
++        }
+     }
+ 
+     if (pa_stream_drop (stream) != 0) {
+@@ -101,6 +77,15 @@
+     }
+ 
+     auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
++
++    if (!info->default_sink_name) return;
++    std::string monitor_name (info->default_sink_name);
++    monitor_name += ".monitor";
++    if (recorder->captureStream && recorder->monitorName == monitor_name
++        && pa_stream_get_state (recorder->captureStream) != PA_STREAM_FAILED) return;
++    recorder->monitorName = monitor_name;
++    recorder->currentWritePointer = 0;
++    recorder->fullFrameReady = false;
+ 
+     pa_sample_spec spec;
+     spec.format = PA_SAMPLE_U8;
+@@ -108,6 +93,7 @@
+     spec.channels = 1;
+ 
+     if (recorder->captureStream) {
++        pa_stream_disconnect (recorder->captureStream);
+ 	pa_stream_unref (recorder->captureStream);
+     }
+ 
+@@ -116,16 +102,13 @@
+     pa_stream_set_state_callback (recorder->captureStream, &pa_stream_notify_cb, userdata);
+     pa_stream_set_read_callback (recorder->captureStream, &pa_stream_read_cb, userdata);
+ 
+-    std::string monitor_name (info->default_sink_name);
+-    monitor_name += ".monitor";
+-
+     // setup latency
+     pa_buffer_attr attr {};
+ 
+     // 10 = latency msecs, 750 = max msecs to store
+     size_t bytesPerSec = pa_bytes_per_second (&spec);
+-    attr.fragsize = bytesPerSec * 10 / 100;
+-    attr.maxlength = attr.fragsize + bytesPerSec * 750 / 100;
++    attr.fragsize = bytesPerSec * 10 / 1000;
++    attr.maxlength = attr.fragsize + bytesPerSec * 750 / 1000;
+ 
+     if (pa_stream_connect_record (recorder->captureStream, monitor_name.c_str (), &attr, PA_STREAM_ADJUST_LATENCY)
+ 	!= 0) {
+@@ -212,7 +195,7 @@
+ }
+ 
+ void PulseAudioPlaybackRecorder::update () {
+-    pa_mainloop_iterate (this->m_mainloop, 0, nullptr);
++    for (int i = 0; i < 8 && pa_mainloop_iterate (this->m_mainloop, 0, nullptr) > 0; ++i) { }
+ 
+     // interpolate current values to the destination
+     for (int i = 0; i < 64; i++) {
+@@ -233,21 +216,26 @@
+ 
+     this->m_captureData.fullFrameReady = false;
+ 
+-    // convert audio data to deltas so the fft library can properly handle it
++    // Remove DC and apply a Hann window to reduce leakage between frequency bands.
++    float mean = 0.0f;
++    for (int i = 0; i < WAVE_BUFFER_SIZE; ++i) mean += this->m_captureData.audioBuffer[i];
++    mean /= WAVE_BUFFER_SIZE;
+     for (int i = 0; i < WAVE_BUFFER_SIZE; i++) {
+-	this->m_audioFFTbuffer[i] = (this->m_captureData.audioBuffer[i] - 128) / 128.0f;
++        const float window = 0.5f * (1.0f - std::cos (2.0f * M_PI * i / WAVE_BUFFER_SIZE));
++        this->m_audioFFTbuffer[i] = (this->m_captureData.audioBuffer[i] - mean) / 128.0f * window;
+     }
+ 
+     // perform full fft pass
+     kiss_fftr (this->m_captureData.kisscfg, this->m_audioFFTbuffer, this->m_FFTinfo);
+ 
+-    // now reduce to the different bands
+-    // use just one for loop to produce all 3
++    float powers[64];
++    spectrumPowers (this->m_FFTinfo, WAVE_BUFFER_SIZE, 44100.0f, powers);
++    std::fill (std::begin (this->m_FFTdestination32), std::end (this->m_FFTdestination32), 0.0f);
++    std::fill (std::begin (this->m_FFTdestination16), std::end (this->m_FFTdestination16), 0.0f);
++    // Normalize -60..0 dBFS, apply gain, then pool adjacent bands without losing peaks.
+     for (int band = 0; band < 64; band++) {
+-	int index = band * 2;
+-	float f1 = this->m_FFTinfo[index].r;
+-	float f2 = this->m_FFTinfo[index].i;
+-	f2 = f1 * f1 + f2 * f2; // magnitude
++	float f1;
++	float f2 = std::max (1.0f, powers[band] * 1000000.0f);
+ 	f1 = 0.0f;
+ 
+ 	if (f2 > 0.0f) {
+@@ -255,11 +243,9 @@
+ 	}
+ 
+ 	this->m_FFTdestination64[band]
+-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f)));
+-	this->m_FFTdestination32[band >> 1]
+-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 31.0f) * 1.0f - 0.5f)));
+-	this->m_FFTdestination16[band >> 2]
+-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 15.0f) * 1.0f - 0.5f)));
++            = std::clamp (f1 / 2.1f, 0.0f, 1.0f);
++        this->m_FFTdestination32[band >> 1] = std::max (this->m_FFTdestination32[band >> 1], this->m_FFTdestination64[band]);
++        this->m_FFTdestination16[band >> 2] = std::max (this->m_FFTdestination16[band >> 2], this->m_FFTdestination64[band]);
+     }
+ }
+ 
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+@@ -3,8 +3,9 @@
+ #include "PlaybackRecorder.h"
+ #include "kiss_fftr.h"
+ #include <pulse/pulseaudio.h>
++#include <string>
+ 
+-#define WAVE_BUFFER_SIZE 1024
++#define WAVE_BUFFER_SIZE 4096
+ 
+ namespace WallpaperEngine::Audio::Drivers::Recorders {
+ class PlaybackRecorder;
+@@ -21,6 +22,7 @@
+ 	size_t currentWritePointer;
+ 	bool fullFrameReady;
+ 	pa_stream* captureStream;
++        std::string monitorName;
+     };
+ 
+     PulseAudioPlaybackRecorder ();
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/Spectrum.h b/src/WallpaperEngine/Audio/Drivers/Recorders/Spectrum.h
+new file mode 100644
+--- /dev/null
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/Spectrum.h
+@@ -0,0 +1,25 @@
++#pragma once
++#include <algorithm>
++#include <cmath>
++#include <iterator>
++
++namespace WallpaperEngine::Audio::Drivers::Recorders {
++// 64 logarithmic bands spanning 20 Hz to min(20 kHz, Nyquist).
++// Each positive FFT bin belongs to exactly one band. DC is excluded.
++// The FFT must use a Hann window; 4/N restores a full-scale sine's amplitude.
++template <typename Complex>
++void spectrumPowers (const Complex* fft, int samples, float rate, float (&powers)[64]) {
++    std::fill (std::begin (powers), std::end (powers), 0.0f);
++    const float high = std::min (20000.0f, rate * 0.5f);
++    if (samples < 2 || high <= 20.0f) return;
++    const float logRange = std::log (high / 20.0f);
++    const float normalization = 16.0f / (samples * static_cast<float> (samples));
++    for (int bin = 1; bin <= samples / 2; ++bin) {
++        const float frequency = bin * rate / samples;
++        if (frequency < 20.0f || frequency > high) continue;
++        const int band = std::clamp (static_cast<int> (64 * std::log (frequency / 20.0f) / logRange), 0, 63);
++        const float power = (fft[bin].r * fft[bin].r + fft[bin].i * fft[bin].i) * normalization;
++        if (std::isfinite (power)) powers[band] = std::max (powers[band], power);
++    }
++}
++} // namespace WallpaperEngine::Audio::Drivers::Recorders

@@ -1,5 +1,6 @@
 import os
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from PySide6.QtCore import QLockFile, QStandardPaths, QTimer, QUrl
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon  # the tray needs the widgets application
 
+from .updater import Updater
 from .engine import Engine
 from .kde import native_wayland, PlasmaDesktop
 from .properties import PropertiesStore
@@ -20,6 +22,19 @@ from .login_background import LoginBackground
 
 
 def main() -> int:
+    if "--self-test" in sys.argv:
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        test_app = QApplication([])
+        from .engine_locator import locate_engine
+        from . import __version__
+        binary = locate_engine()
+        if not binary:
+            raise RuntimeError("O pacote não contém o motor.")
+        result = subprocess.run([binary, "--help"], capture_output=True, text=True, timeout=30)
+        if result.returncode != 0 or "--audio-gain" not in result.stdout:
+            raise RuntimeError("O motor empacotado não passou na verificação: " + result.stderr)
+        print("wpe-gui", __version__, "Python/Qt/motor: OK")
+        return 0
     if "--install-desktop" in sys.argv or "--uninstall-desktop" in sys.argv:
         from . import desktop_entry
         done = desktop_entry.install() if "--install-desktop" in sys.argv else desktop_entry.uninstall()
@@ -47,6 +62,14 @@ def main() -> int:
             print("wpe-gui já está aberto.", file=sys.stderr)
         return 0
 
+    updater = Updater()
+    updater.restartRequested.connect(app.quit)
+    app.aboutToQuit.connect(updater.shutdown)
+    from .bundle import ensure_integrations
+    try:
+        ensure_integrations()
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print("Integração do pacote:", error, file=sys.stderr)
     settings = Settings()
     properties = PropertiesStore()
     engine = Engine(settings, properties)
@@ -64,6 +87,7 @@ def main() -> int:
 
     qml = QQmlApplicationEngine()
     ctx = qml.rootContext()
+    ctx.setContextProperty("updater", updater)
     ctx.setContextProperty("settings", settings)
     ctx.setContextProperty("backend", engine)
     ctx.setContextProperty("loginBackground", login_background)

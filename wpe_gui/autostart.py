@@ -29,7 +29,8 @@ def set_enabled(value: bool) -> None:
         return
     root = Path(__file__).resolve().parent.parent
     launcher = root / "wpe-gui.sh"
-    command = [str(launcher)] if launcher.is_file() else [sys.executable, "-m", "wpe_gui"]
+    appimage = os.environ.get("APPIMAGE")
+    command = [appimage] if appimage else ([str(launcher)] if launcher.is_file() else [sys.executable, "-m", "wpe_gui"])
     # Like Steam's -silent: starting with the session must not pop the window up, just live in the tray
     command.append("--minimized")
     content = (

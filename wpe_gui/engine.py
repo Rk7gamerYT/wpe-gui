@@ -52,7 +52,26 @@ class Engine(QObject):
         self._reapply.timeout.connect(self._reapply_pending)
         self._pending: set[str] = set()
         self._paused: set[str] = set()  # target keys whose process is stopped (power saving)
-        self._silent: dict[str, bool] = {}  # target key -> whether its process was started with --silent
+        self._power_paused: set[str] = set()
+        self._manual_paused: set[str] = set()
+        self._pause_all = False
+        self._audio_roles: dict[str, bool] = {}
+        self._audio_sync = QTimer(self, singleShot=True, interval=0)
+        self._audio_sync.timeout.connect(self._rebalance_audio)
+        self._audio_settings = self._audio_settings_snapshot()
+        settings.changed.connect(self._on_settings_changed)
+
+    def _audio_settings_snapshot(self):
+        return tuple(self._settings.get(key) for key in ("volume", "silent", "autoMute", "audioGain"))
+
+    def _on_settings_changed(self):
+        audio = self._audio_settings_snapshot()
+        if audio == self._audio_settings:
+            return
+        self._audio_settings = audio
+        self._pending.update(self._procs)
+        if self._pending:
+            self._reapply.start()
 
     # -- state exposed to QML ------------------------------------------------------------------
 
@@ -67,6 +86,17 @@ class Engine(QObject):
     @Property(bool, notify=activeChanged)
     def running(self):
         return bool(self._procs)
+
+    @Property(bool, notify=activeChanged)
+    def hasManualPause(self):
+        return self._pause_all or bool(self._manual_paused & self._assignments.keys())
+
+    @Property("QVariant", notify=activeChanged)
+    def playbackTargets(self):
+        return [{"key": key, "label": "Todos os monitores (estendido)" if key == SPAN else key,
+                 "manuallyPaused": self._pause_all or key in self._manual_paused,
+                 "paused": key in self._paused}
+                for key in sorted(self._assignments)]
 
     @Property("QVariant", notify=activeChanged)
     def active(self):
@@ -127,14 +157,18 @@ class Engine(QObject):
 
     def build_args(self, path: str, target: str, audible: bool = True) -> list[str]:
         s = self._settings
+        options = self._properties.engine_options(path)
         args = ["--fps", str(int(float(s.get("fps"))))]
         assets = s.get("assetsDir") or (str(a) if (a := library.default_assets_dir()) else "")
         if assets:
             args += ["--assets-dir", assets]
-        if s.get("silent") or not audible:
+        sound = options.get("sound", "")
+        silent = sound == "muted" or (sound != "enabled" and s.get("silent"))
+        if silent or not audible:
             args.append("--silent")
         else:
-            args += ["--volume", str(int(float(s.get("volume"))))]  # sliders save floats; the engine only takes integers
+            volume = options.get("volume")
+            args += ["--volume", str(int(float(s.get("volume") if volume in (None, "") else volume)))]
         if not s.get("autoMute"):
             args.append("--noautomute")
         if s.get("disableMouse"):
@@ -158,7 +192,6 @@ class Engine(QObject):
         if native_wayland():
             args += ["--layer", "background"]
 
-        options = self._properties.engine_options(path)
         if library.audio_responsive(path):
             try:
                 gain = float(options.get("audioGain") or s.get("audioGain"))
@@ -176,14 +209,51 @@ class Engine(QObject):
     # -- power saving --------------------------------------------------------------------------
 
     def setPausedTargets(self, wanted: set):
-        """Stop (SIGSTOP) the processes whose monitor is covered and resume (SIGCONT) the others."""
-        wanted = {k for k in wanted if k in self._procs}
+        """Update automatic pauses without clearing manual playback controls."""
+        self._power_paused = set(wanted)
+        self._update_pauses()
+
+    def _wanted_pauses(self):
+        manual = set(self._assignments) if self._pause_all else self._manual_paused
+        return (manual | self._power_paused) & self._procs.keys()
+
+    def _update_pauses(self):
+        wanted = self._wanted_pauses()
         if wanted == self._paused:
             return
         for key in self._procs.keys() & (wanted | self._paused):
             self._signal(self._procs[key], signal.SIGSTOP if key in wanted else signal.SIGCONT)
         self._paused = wanted
+        self._audio_sync.start()
         self.activeChanged.emit()
+
+    @Slot(bool)
+    def setGlobalPaused(self, paused):
+        self._pause_all = paused
+        if not paused:
+            self._manual_paused.clear()
+        self._update_pauses()
+        self.activeChanged.emit()
+
+    @Slot(str, bool)
+    def setTargetPaused(self, key, paused):
+        if key not in self._assignments:
+            return
+        if self._pause_all and not paused:
+            self._manual_paused.update(self._assignments)
+            self._pause_all = False
+        if paused:
+            self._manual_paused.add(key)
+        else:
+            self._manual_paused.discard(key)
+        self._update_pauses()
+        self.activeChanged.emit()
+
+    def _process_started(self, key, proc):
+        if self._procs.get(key) is proc and key in self._wanted_pauses():
+            # QProcess.start() may return before a PID exists; apply the pause once it does.
+            self._signal(proc, signal.SIGSTOP)
+        self._update_pauses()
 
     @staticmethod
     def _signal(proc, sig):
@@ -193,28 +263,30 @@ class Engine(QObject):
         except ProcessLookupError:
             pass
 
-    # -- audio ---------------------------------------------------------------------------------
-
-    def _audible_key(self, keys) -> str | None:
-        """Only one wallpaper plays sound: the engine mutes itself when it sees *another process* playing audio
-        (it even counts a sibling engine process), so several audible processes would silence each other."""
-        keys = sorted(keys)
-        if not keys:
-            return None
-        if SPAN in keys:
-            return SPAN
-        primary = QGuiApplication.primaryScreen().name()
-        return primary if primary in keys else keys[0]
+    def _audible_targets(self):
+        """One sound source per wallpaper, preferring a copy that is not paused."""
+        groups = {}
+        for key in sorted(self._procs):
+            path = self._assignments.get(key)
+            if path:
+                groups.setdefault(str(Path(path).resolve()), []).append(key)
+        audible = set()
+        for keys in groups.values():
+            candidates = [key for key in keys if key not in self._paused] or keys
+            # Keep an existing source to avoid restarting it when another monitor is added.
+            audible.add(next((key for key in candidates if self._audio_roles.get(key)), candidates[0]))
+        return audible
 
     def _rebalance_audio(self):
-        """After monitors were added or removed, make sure exactly one process is the audible one."""
-        audible = self._audible_key(self._assignments)
-        for key in list(self._procs):
-            if self._silent.get(key) != (key != audible):
-                path = self._assignments.get(key)
-                if path:
-                    self._stop_keys([key])
-                    self._start(key, path, planned=set(self._assignments) | {key})
+        audible = self._audible_targets()
+        changes = [key for key in self._procs if self._audio_roles.get(key) != (key in audible)]
+        # Stop duplicate playback before enabling the replacement source.
+        for key in sorted(changes, key=lambda key: key in audible):
+            path = self._assignments.get(key)
+            if not path:
+                continue
+            self._stop_keys([key])
+            self._start(key, path, audio_owner=key in audible)
 
     # -- starting and stopping -----------------------------------------------------------------
 
@@ -247,29 +319,33 @@ class Engine(QObject):
         planned = set(self._assignments) | set(keys)
         for key in keys:
             self._start(key, path, planned)
-        self._rebalance_audio()
         self._remember()
 
-    def _start(self, key: str, path: str, planned=None, extra_args=None):
+    def _start(self, key: str, path: str, planned=None, extra_args=None, audio_owner=None):
         planned = planned if planned is not None else set(self._assignments) | {key}
-        silent = key != self._audible_key(planned)
         proc = QProcess(self)
+        env = QProcessEnvironment.systemEnvironment()
+        # Some scenes use audio shaders/scripts without declaring support in project.json.
+        env.insert("WPE_AUDIO_PROCESSING", "1" if library.audio_responsive(path) else "0")
         if self.windowed():
             # GLEW can't initialise on native Wayland; run the window through XWayland
-            env = QProcessEnvironment.systemEnvironment()
             env.remove("WAYLAND_DISPLAY")
             env.insert("XDG_SESSION_TYPE", "x11")
-            proc.setProcessEnvironment(env)
+        proc.setProcessEnvironment(env)
         proc.setProcessChannelMode(QProcess.MergedChannels)
+        proc.started.connect(lambda k=key, p=proc: self._process_started(k, p))
         proc.finished.connect(lambda code, _s, k=key, p=proc: self._on_finished(k, p, code))
         proc.readyReadStandardOutput.connect(lambda p=proc: self._read_output(p))
         proc.errorOccurred.connect(lambda error, k=key, p=proc: self._on_error(k, p, error))
-        self._silent[key] = silent
         self._procs[key] = proc
         self._assignments[key] = path
+        audible = key in self._audible_targets() if audio_owner is None else audio_owner
+        self._audio_roles[key] = audible
         self._started_at[proc] = time.monotonic()
         self._output[proc] = b""
-        proc.start(self.binary(), self.build_args(path, key, audible=not silent) + (extra_args or []))
+        proc.start(self.binary(), self.build_args(path, key, audible=audible) + (extra_args or []))
+        self._update_pauses()
+        self._audio_sync.start()
         self.activeChanged.emit()
 
     def captureWallpaper(self, path: str, destination: str) -> bool:
@@ -294,6 +370,7 @@ class Engine(QObject):
                 timer.deleteLater()
             self._failures.pop(key, None)
             self._assignments.pop(key, None)
+            self._audio_roles.pop(key, None)
         procs = [(k, self._procs.pop(k)) for k in keys if k in self._procs]
         for k, proc in procs:
             proc.finished.disconnect()
@@ -313,17 +390,21 @@ class Engine(QObject):
 
     @Slot()
     def stop(self):
+        self._manual_paused.clear()
+        self._pause_all = False
         self._stop_keys(list(self._assignments))
 
     def shutdown(self):
         """Stop the processes when the app quits, keeping what was saved so restore() can bring it back."""
         self._stop_keys(list(self._assignments))
+        self._audio_sync.stop()
 
     @Slot(str)
     def stopPath(self, path: str):
         """Stop this wallpaper on every monitor it runs on, leaving the others alone."""
         self._stop_keys([k for k, p in self._assignments.items() if p == path])
-        self._rebalance_audio()
+        self._manual_paused.intersection_update(self._assignments)
+        self._audio_sync.start()
 
     def _remember(self):
         self._settings.set("assignments", dict(self._assignments))
@@ -361,7 +442,6 @@ class Engine(QObject):
                 continue
             self._stop_keys([key])
             self._start(key, path, planned=set(valid) | set(self._assignments))
-        self._rebalance_audio()
 
     @Slot(str)
     def propertiesChanged(self, path: str):
@@ -404,6 +484,8 @@ class Engine(QObject):
             proc.deleteLater()
             return
         del self._procs[key]
+        self._audio_roles.pop(key, None)
+        self._audio_sync.start()
         self._paused.discard(key)
         path = self._assignments[key]
         attempts = (0 if uptime >= 120 else self._failures.get(key, 0)) + 1

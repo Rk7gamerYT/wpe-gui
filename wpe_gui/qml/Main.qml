@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQml.Models
 
 ApplicationWindow {
     id: win
@@ -81,6 +82,33 @@ ApplicationWindow {
             anchors.rightMargin: 8
             anchors.verticalCenter: parent.verticalCenter
             spacing: 6
+            Button {
+                height: 26
+                text: backend.hasManualPause ? "Retomar todos" : "Pausar todos"
+                enabled: backend.running
+                onClicked: backend.setGlobalPaused(!backend.hasManualPause)
+            }
+            Button {
+                height: 26
+                text: "Monitores"
+                enabled: backend.running
+                onClicked: monitorPauseMenu.popup()
+                Menu {
+                    id: monitorPauseMenu
+                    Instantiator {
+                        model: backend.playbackTargets
+                        delegate: MenuItem {
+                            required property var modelData
+                            text: modelData.label + (modelData.paused && !modelData.manuallyPaused ? " (pausa automática)" : "")
+                            checkable: true
+                            checked: modelData.manuallyPaused
+                            onTriggered: backend.setTargetPaused(modelData.key, !modelData.manuallyPaused)
+                        }
+                        onObjectAdded: function(index, object) { monitorPauseMenu.insertItem(index, object) }
+                        onObjectRemoved: function(index, object) { monitorPauseMenu.removeItem(object) }
+                    }
+                }
+            }
             Button {
                 height: 26
                 text: "Restaurar wallpapers"

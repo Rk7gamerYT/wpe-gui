@@ -35,8 +35,7 @@ class SavedWallpaperTests(unittest.TestCase):
         self.assertTrue(self.engine.canRestore)
         with patch.object(self.engine, '_screens_by_name', return_value={'DP-5': Mock()}), \
              patch.object(self.engine, 'binary', return_value='/bin/true'), \
-             patch.object(self.engine, '_start') as start, \
-             patch.object(self.engine, '_rebalance_audio'):
+             patch.object(self.engine, '_start') as start:
             self.engine.restore()
             start.assert_called_once_with('DP-5', str(self.root), planned={'DP-5'})
 
@@ -44,8 +43,7 @@ class SavedWallpaperTests(unittest.TestCase):
         self.engine._assignments = dict(self.saved)
         with patch.object(self.engine, '_screens_by_name', return_value={'DP-5': Mock()}), \
              patch.object(self.engine, 'binary', return_value='/bin/true'), \
-             patch.object(self.engine, '_start') as start, \
-             patch.object(self.engine, '_rebalance_audio'):
+             patch.object(self.engine, '_start') as start:
             self.engine.restore()
             self.engine.restore()
             start.assert_not_called()

@@ -46,8 +46,7 @@ class KDEIntegrationTests(unittest.TestCase):
         self.settings.set('assignments', {'HDMI-3': str(self.root)})
         with patch.object(self.engine, '_screens_by_name', return_value={'HDMI-A-3': Mock()}), \
              patch.object(self.engine, 'binary', return_value='/bin/true'), \
-             patch.object(self.engine, '_start') as start, \
-             patch.object(self.engine, '_rebalance_audio'):
+             patch.object(self.engine, '_start') as start:
             self.engine.restore()
         start.assert_called_once_with('HDMI-A-3', str(self.root), planned={'HDMI-A-3'})
         self.assertEqual(self.settings.get('assignments'), {'HDMI-A-3': str(self.root)})
@@ -58,7 +57,6 @@ class KDEIntegrationTests(unittest.TestCase):
         self.settings.set('assignments', {'HDMI-3': str(self.root), 'HDMI-A-3': str(current)})
         with patch.object(self.engine, '_screens_by_name', return_value={'HDMI-A-3': Mock()}), \
              patch.object(self.engine, 'binary', return_value='/bin/true'), \
-             patch.object(self.engine, '_start') as start, \
-             patch.object(self.engine, '_rebalance_audio'):
+             patch.object(self.engine, '_start') as start:
             self.engine.restore()
         start.assert_called_once_with('HDMI-A-3', str(current), planned={'HDMI-A-3'})

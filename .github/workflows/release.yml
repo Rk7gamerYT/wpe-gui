@@ -1,0 +1,77 @@
+name: Build single-file AppImage
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publicar o pacote depois de construir e testar
+        type: boolean
+        default: false
+permissions:
+  contents: write
+jobs:
+  appimage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies (only on the build machine)
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/distro-packages.sh
+          run() { "$@"; }
+          say() { echo "$*"; }
+          install_packages debian
+          sudo apt-get install -y patchelf squashfs-tools desktop-file-utils libopengl0 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-randr0 libxcb-render-util0 libxcb-image0 libxcb-xinput0 libxcb-xfixes0
+      - name: Test app and validate patches
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install -e .
+          QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover -s tests
+          ref=$(sed -n 's/^ENGINE_REF="\([a-f0-9]*\)"/\1/p' install.sh)
+          git clone --recursive https://github.com/Almamu/linux-wallpaperengine.git engine
+          git -C engine checkout "$ref"
+          git -C engine submodule update --init --recursive
+          .venv/bin/python scripts/check-engine-patches.py engine
+          for patch in "$PWD"/patches/*.patch; do git -C engine apply "$patch"; done
+      - name: Build the complete engine
+        run: |
+          cmake -S engine -B engine/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build engine/build -j2
+      - name: Build the AppImage with all runtime dependencies
+        run: python3 packaging/build_appimage.py --engine-output engine/build/output --engine-source engine --output dist
+      - name: Test the actual downloadable file without FUSE
+        run: |
+          QT_QPA_PLATFORM=offscreen dist/wpe-gui-*-x86_64.AppImage --appimage-extract-and-run --self-test
+      - name: Package corresponding engine source
+        run: |
+          tar --exclude=.git --exclude=build -czf dist/wpe-engine-source.tar.gz -C engine .
+          tar -czf dist/wpe-engine-patches.tar.gz patches scripts/check-engine-patches.py docs/SCENESCRIPT.md docs/AUDIO.md
+          cd dist
+          sha256sum wpe-engine-source.tar.gz wpe-engine-patches.tar.gz >> SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wpe-gui-linux-x86_64
+          path: |
+            dist/*.AppImage
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          compression-level: 0
+      - name: Publish the verified version
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v$(python3 -c 'from wpe_gui import __version__; print(__version__)')"
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "$tag" ]]; then echo "Tag/versão incompatíveis"; exit 1; fi
+          if gh release view "$tag" --json isDraft --jq '.isDraft' > /tmp/release-draft 2>/dev/null; then
+            test "$(cat /tmp/release-draft)" = true
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --draft --title "wpe-gui $tag — pacote completo" --notes-file docs/RELEASE.md
+          fi
+          gh release upload "$tag" dist/*.AppImage dist/*.tar.gz dist/SHA256SUMS --clobber
+          gh release edit "$tag" --draft=false --latest

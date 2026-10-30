@@ -1,5 +1,13 @@
 # Instalação
 
+## Opção recomendada: AppImage
+
+Use o [pacote completo da última release](https://github.com/Rk7gamerYT/wpe-gui/releases/latest).
+Ele inclui o app, o motor e as bibliotecas. As dependências e a compilação das seções
+seguintes são necessárias apenas para instalar pelo código-fonte.
+Veja os requisitos e o atualizador integrado nas [notas da versão](RELEASE.md).
+
+
 O **wpe-gui** é só a interface. Para funcionar você precisa de três coisas:
 
 1. o **motor** [linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine), compilado com os patches deste projeto;
@@ -90,7 +98,7 @@ sudo apt-get install -y build-essential cmake git pkg-config \
 ```bash
 sudo dnf install -y gcc gcc-c++ cmake git \
   libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel glew-devel freeglut-devel \
-  SDL2-devel lz4-devel ffmpeg ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv mpv-devel \
+  SDL2-devel lz4-devel ffmpeg-free ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv mpv-devel \
   pulseaudio-libs-devel fftw-devel gmp-devel freetype-devel wayland-devel wayland-protocols-devel \
   libxkbcommon-devel python3 python3-pip xorg-x11-utils
 ```
@@ -103,7 +111,7 @@ Para decodificar todos os vídeos você provavelmente precisa do `ffmpeg` comple
 *Lista montada a partir do README do motor (que só cita o AUR). Não testada pelo autor.*
 
 ```bash
-sudo pacman -S --needed base-devel cmake git libxrandr libxinerama libxcursor libxi mesa glew freeglut sdl2 lz4 \
+sudo pacman -S --needed base-devel cmake git libxrandr libxinerama libxcursor libxi mesa glew freeglut sdl2-compat lz4 \
   ffmpeg libxxf86vm glm glfw mpv libpulse fftw freetype2 wayland wayland-protocols libxkbcommon \
   python python-pip xorg-xprop xorg-xwininfo
 ```
@@ -127,6 +135,8 @@ O projeto traz dois patches, em `patches/`, feitos sobre uma versão específica
 |---|---|
 | `0001-shaders-repair-implicit-vector-truncation.patch` | O compilador de shaders do Windows aceita `vec4 * vec2` (corta o vetor maior); o GLSL não. Sem o patch, wallpapers que fazem isso ficam **pretos**. |
 | `0002-audio-add-audio-gain-option.patch` | Adiciona `--audio-gain`, usado pela "Intensidade do áudio". |
+| `0003-scripting-audio-buffers-and-layers.patch` | Entrega o espectro ao SceneScript e executa os scripts das barras e camadas. |
+| `0004-audio-map-spectrum-frequency-bands.patch` | Corrige a distribuição das frequências e o agrupamento das bandas de áudio. |
 
 ```bash
 git clone --recurse-submodules https://github.com/Almamu/linux-wallpaperengine.git

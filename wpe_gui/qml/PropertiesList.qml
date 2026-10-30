@@ -10,6 +10,19 @@ ColumnLayout {
     property var items: []
     readonly property bool audioResponsive: folder !== "" && properties.audioResponsive(folder)
     spacing: 10
+    property int optionRevision: 0
+    function engineOption(key) {
+        const revision = optionRevision;
+        return properties.engineOption(folder, key);
+    }
+    Connections {
+        target: properties
+        function onChanged(folder) { if (folder === root.folder) root.optionRevision++; }
+    }
+    Connections {
+        target: settings
+        function onChanged() { root.optionRevision++; }
+    }
 
     function reload() { items = folder ? properties.load(folder) : [] }
     // Bool/combo values can show or hide other properties (conditions), so they rebuild the list
@@ -33,8 +46,34 @@ ColumnLayout {
             Layout.fillWidth: true
             readonly property var values: ["", "stretch", "fit", "fill"]
             model: ["Padrão", "Esticar", "Ajustar", "Preencher"]
-            currentIndex: Math.max(0, values.indexOf(properties.engineOption(root.folder, "scaling")))
+            currentIndex: Math.max(0, values.indexOf(root.engineOption("scaling")))
             onActivated: properties.setEngineOption(root.folder, "scaling", values[currentIndex])
+        }
+        Label { text: "Som do wallpaper" }
+        ComboBox {
+            Layout.fillWidth: true
+            readonly property var values: ["", "enabled", "muted"]
+            model: ["Padrão do app", "Ligado", "Silenciado"]
+            currentIndex: Math.max(0, values.indexOf(root.engineOption("sound")))
+            onActivated: properties.setEngineOption(root.folder, "sound", values[currentIndex])
+        }
+        Label { text: "Volume do wallpaper" }
+        RowLayout {
+            Layout.fillWidth: true
+            Slider {
+                id: wallpaperVolume
+                Layout.fillWidth: true
+                from: 0; to: 100; stepSize: 1
+                value: Number(root.engineOption("volume") || settings.value("volume"))
+                onMoved: if (!pressed) properties.setEngineOption(root.folder, "volume", String(Math.round(value)))
+                onPressedChanged: if (!pressed) properties.setEngineOption(root.folder, "volume", String(Math.round(value)))
+            }
+            Label { text: Math.round(wallpaperVolume.value) + "%" }
+            Button {
+                text: "Padrão"
+                enabled: root.engineOption("volume") !== ""
+                onClicked: properties.setEngineOption(root.folder, "volume", "")
+            }
         }
         // Only wallpapers that react to the sound playing on the computer get this
         Label { text: "Intensidade do áudio"; visible: root.audioResponsive }
@@ -45,7 +84,7 @@ ColumnLayout {
                 id: gainSlider
                 Layout.fillWidth: true
                 from: 0; to: 300; stepSize: 5
-                value: 100 * parseFloat(properties.engineOption(root.folder, "audioGain") || settings.value("audioGain"))
+                value: 100 * parseFloat(root.engineOption("audioGain") || settings.value("audioGain"))
                 onPressedChanged: if (!pressed) properties.setEngineOption(root.folder, "audioGain", String(value / 100))
                 onMoved: if (!pressed) properties.setEngineOption(root.folder, "audioGain", String(value / 100))
             }
@@ -56,7 +95,7 @@ ColumnLayout {
             Layout.fillWidth: true
             readonly property var values: ["", "border", "repeat"]
             model: ["Padrão", "Cor da borda", "Repetir"]
-            currentIndex: Math.max(0, values.indexOf(properties.engineOption(root.folder, "clamping")))
+            currentIndex: Math.max(0, values.indexOf(root.engineOption("clamping")))
             onActivated: properties.setEngineOption(root.folder, "clamping", values[currentIndex])
         }
     }
