@@ -77,3 +77,37 @@ class AudioResponseTests(unittest.TestCase):
         self.assertNotEqual(one, two)
         self.assertEqual(json.loads(one.read_text()), 3)
         self.assertEqual(json.loads(two.read_text()), 0)
+
+    def test_curve_changes_are_live_and_automatic_is_neutral(self):
+        self.engine._procs = {'A': Mock()}
+        self.engine._assignments = {'A': self.folder}
+        self.engine._render_signatures[self.folder] = self.engine._render_signature(self.folder)
+        self.props.setEngineOption(self.folder, 'audioCurve', '2')
+        control = Path(self.engine._sync_audio_response(self.folder)).with_suffix('.curve.json')
+        self.assertEqual(json.loads(control.read_text()), 1)
+        self.props.setEngineOption(self.folder, 'audioCurveMode', 'manual')
+        self.assertEqual(json.loads(control.read_text()), 2)
+        self.assertFalse(self.engine._reapply.isActive())
+        self.props.setEngineOption(self.folder, 'audioCurveMode', 'auto')
+        self.assertEqual(json.loads(control.read_text()), 1)
+        self.assertFalse(self.engine._pending)
+
+    def test_native_curve_is_detected_without_changing_its_default(self):
+        project = {'title':'curve', 'type':'scene', 'general':{'properties':{
+            'audio_exponent': {'type':'slider', 'text':'Audio curve exponent', 'value':2},
+            'gamma': {'type':'slider', 'text':'Image gamma', 'value':1}}}}
+        file = Path(self.folder)/'project.json'; file.write_text(json.dumps(project))
+        self.assertEqual(self.props.audioCurveControls(self.folder),
+                         [{'key':'audio_exponent','label':'Audio curve exponent'}])
+        self.props.setEngineOption(self.folder, 'audioCurveMode', 'auto')
+        self.engine._sync_audio_response(self.folder)
+        self.assertEqual(json.loads(file.read_text()), project)
+        self.assertEqual(self.props.engine_args(self.folder), [])
+
+    def test_curve_is_bounded_and_rejects_invalid_values(self):
+        for value, expected in [('100','4'), ('0.01','0.25')]:
+            self.props.setEngineOption(self.folder, 'audioCurve', value)
+            self.assertEqual(self.props.engineOption(self.folder, 'audioCurve'), expected)
+        for value in ['nan','inf','invalid']:
+            self.props.setEngineOption(self.folder, 'audioCurve', value)
+            self.assertEqual(self.props.engineOption(self.folder, 'audioCurve'), '0.25')

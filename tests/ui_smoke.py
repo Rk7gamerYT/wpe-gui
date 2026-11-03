@@ -56,6 +56,8 @@ root = qml.rootObjects()[0]
 folder = sys.argv[1] if len(sys.argv) > 1 else (str(model._items[0].path) if model._items else "")
 if os.environ.get("WPE_UI_AUDIO_MANUAL") == "1" and folder:
     properties.setEngineOption(folder, "audioResponseMode", "manual")
+if os.environ.get("WPE_UI_CURVE_MANUAL") == "1" and folder:
+    properties.setEngineOption(folder, "audioCurveMode", "manual")
 root.setProperty("selected", {"title": "t", "preview": "", "path": folder, "wtype": "scene", "description": "d", "tags": ""})
 
 

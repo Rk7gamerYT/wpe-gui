@@ -72,7 +72,7 @@ class Engine(QObject):
         args = self._properties.engine_args(path)
         args = args if isinstance(args, (tuple, list)) else []
         return (tuple(args), tuple(sorted((key, value) for key, value in options.items()
-                if key not in ("audioResponseMode", "audioResponseSpeed"))))
+                if key not in ("audioResponseMode", "audioResponseSpeed", "audioCurveMode", "audioCurve"))))
 
     def _sync_audio_response(self, path):
         options = self._properties.engine_options(path)
@@ -84,6 +84,10 @@ class Engine(QObject):
             token = hashlib.sha256(str(Path(path).resolve()).encode()).hexdigest()[:24]
             state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
             target = state / "wpe-gui/audio-controls" / (token + ".json")
+            curve = float(options.get("audioCurve") or 1.0)
+            if not math.isfinite(curve): curve = 1.0
+            curve = min(4.0, max(0.25, curve)) if options.get("audioCurveMode") == "manual" else 1.0
+            write_json(target.with_suffix(".curve.json"), curve)
             write_json(target, speed)
             return str(target)
         except (OSError, TypeError, ValueError) as error:
@@ -386,6 +390,7 @@ class Engine(QObject):
         control = self._sync_audio_response(path)
         if control:
             env.insert("WPE_AUDIO_RESPONSE_FILE", control)
+            env.insert("WPE_AUDIO_CURVE_FILE", str(Path(control).with_suffix(".curve.json")))
         self._render_signatures[path] = self._render_signature(path)
         if self.windowed():
             # GLEW can't initialise on native Wayland; run the window through XWayland

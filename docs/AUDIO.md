@@ -162,3 +162,27 @@ nem disparar uma nova captura do fundo estático. O modo automático usa o valor
 
 Isso regula a resposta do espectro. Atrasos adicionais inseridos pelo próprio
 wallpaper, pelo servidor de áudio ou pelo FPS não são removidos automaticamente.
+
+## Curva do espectro (patch 0009)
+
+**Curva do espectro** tem modos independentes da velocidade de sincronização:
+
+- **Automático** mantém a transferência do motor neutra (fator 1), preservando a
+  curva aplicada pelos shaders/scripts do wallpaper. Quando há propriedade
+  numérica exposta de curva/expoente/gamma do áudio, o painel a identifica e
+  mantém o controle nativo nas propriedades. Sem ela, usa a resposta padrão;
+  não tenta deduzir valores de controles genéricos de brilho ou velocidade.
+- **Manual** aceita 25%–400%. A transferência é `y = x^(1/fator)` para níveis
+  normalizados de 0 a 1: 100% é identidade, abaixo reduz níveis intermediários e
+  acima os realça. Silêncio continua zero e o máximo continua um. Isso muda a
+  forma da resposta, separadamente de volume, intensidade e velocidade.
+
+O fator manual é guardado por wallpaper. Voltar ao automático usa fator 1 sem
+apagar o valor manual salvo nem alterar os arquivos/propriedades do wallpaper.
+As curvas internas continuam sendo aplicadas também no modo manual; o controle
+é uma transformação adicional do espectro, não uma edição do shader do autor.
+
+O fator é enviado em arquivo escalar próprio, indicado por
+`WPE_AUDIO_CURVE_FILE`, e atualizado ao vivo a cada 100 ms. Não recria a cena nem
+provoca captura do fundo. A detecção de controles nativos depende dos nomes e
+rótulos numéricos expostos, sem prometer reconhecer todo controle personalizado.

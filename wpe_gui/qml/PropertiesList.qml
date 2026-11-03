@@ -9,6 +9,7 @@ ColumnLayout {
     property string folder: ""
     property var items: []
     property var nativeAudioTiming: []
+    property var nativeAudioCurve: []
     readonly property bool audioResponsive: folder !== "" && properties.audioResponsive(folder)
     spacing: 10
     property int optionRevision: 0
@@ -28,6 +29,7 @@ ColumnLayout {
     function reload() {
         items = folder ? properties.load(folder) : []
         nativeAudioTiming = folder ? properties.audioTimingControls(folder) : []
+        nativeAudioCurve = folder ? properties.audioCurveControls(folder) : []
     }
     // Bool/combo values can show or hide other properties (conditions), so they rebuild the list
     function commit(key, type, value) {
@@ -123,6 +125,38 @@ ColumnLayout {
             text: root.nativeAudioTiming.length
                 ? "Este wallpaper tem ajuste próprio de resposta do áudio nas propriedades abaixo."
                 : "Automático adapta a resposta às mudanças do som. No manual, valores maiores reagem mais rápido. Aplica sem reiniciar o wallpaper."
+        }
+        Label { text: "Curva do espectro"; visible: root.audioResponsive }
+        ComboBox {
+            visible: root.audioResponsive
+            Layout.fillWidth: true
+            model: ["Automático", "Manual"]
+            currentIndex: root.engineOption("audioCurveMode") === "manual" ? 1 : 0
+            onActivated: properties.setEngineOption(root.folder, "audioCurveMode", currentIndex ? "manual" : "auto")
+        }
+        Label { text: "Tamanho da resposta"; visible: root.audioResponsive && root.engineOption("audioCurveMode") === "manual" }
+        RowLayout {
+            visible: root.audioResponsive && root.engineOption("audioCurveMode") === "manual"
+            Layout.fillWidth: true
+            Slider {
+                id: curveSize
+                Layout.fillWidth: true
+                from: 25; to: 400; stepSize: 5
+                value: 100 * Number(root.engineOption("audioCurve") || "1")
+                onPressedChanged: if (!pressed) properties.setEngineOption(root.folder, "audioCurve", String(value / 100))
+                onMoved: if (!pressed) properties.setEngineOption(root.folder, "audioCurve", String(value / 100))
+            }
+            Label { text: Math.round(curveSize.value) + "%" }
+        }
+        Label {
+            visible: root.audioResponsive
+            Layout.columnSpan: 2; Layout.fillWidth: true
+            wrapMode: Text.Wrap; opacity: 0.7; font.pixelSize: 11
+            text: root.engineOption("audioCurveMode") === "manual"
+                ? "Abaixo de 100% reduz a resposta; acima aumenta os detalhes mais baixos. Não altera o volume da música."
+                : (root.nativeAudioCurve.length
+                    ? "Curva própria detectada: respeita o ajuste do wallpaper nas propriedades abaixo."
+                    : "Preserva a curva interna do wallpaper. Sem ajuste próprio, usa a resposta padrão.")
         }
         Label { text: "Bordas" }
         ComboBox {

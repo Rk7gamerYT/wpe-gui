@@ -1,0 +1,66 @@
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h
+index c1d6f9d..1c6f27b 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h
+@@ -66,6 +66,14 @@ struct SpectrumDynamics {
+         }
+     }
+ };
++// Neutral in automatic mode. Manual curvature expands or compresses the visual
++// response while preserving silence, full scale and the ordering of bands.
++inline float curveSpectrum (float level, float amount = 1.0f) {
++    if (!std::isfinite (level)) return 0.0f;
++    if (!std::isfinite (amount)) amount = 1.0f;
++    amount = std::clamp (amount, 0.25f, 4.0f);
++    return std::pow (std::clamp (level, 0.0f, 1.0f), 1.0f / amount);
++}
+ inline float smoothSpectrum (float current, float target, float dt, float speed = 1.0f) {
+     if (!std::isfinite (current)) current = 0.0f;
+     if (!std::isfinite (target)) target = 0.0f;
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/AudioResponseControl.h b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioResponseControl.h
+index 4410d83..c63331b 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/AudioResponseControl.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioResponseControl.h
+@@ -13,4 +13,9 @@ inline float loadResponseSpeed (const char* path, float current) {
+     if (!input.eof () || (value != 0.0f && (value < 0.25f || value > 4.0f))) return current;
+     return value;
+ }
++inline float loadSpectrumCurve (const char* path, float current) {
++    const float value = loadResponseSpeed (path, current);
++    return value > 0.0f ? value : current;
++}
++
+ }
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+index 3bab401..d1b9709 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+@@ -40,6 +40,7 @@ private:
+ 
+     SpectrumDynamics m_dynamics;
+     float m_responseSpeed = 0.0f;
++    float m_spectrumCurve = 1.0f;
+     std::chrono::steady_clock::time_point m_nextResponseCheck {};
+     std::chrono::steady_clock::time_point m_lastUpdate = std::chrono::steady_clock::now ();
+     std::chrono::steady_clock::time_point m_lastAudio = std::chrono::steady_clock::now ();
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+index 9166d6f..ab17764 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+@@ -180,6 +180,7 @@ void PulseAudioPlaybackRecorder::update () {
+     const auto now = std::chrono::steady_clock::now ();
+     if (now >= m_nextResponseCheck) {
+         m_responseSpeed = loadResponseSpeed (std::getenv ("WPE_AUDIO_RESPONSE_FILE"), m_responseSpeed);
++        m_spectrumCurve = loadSpectrumCurve (std::getenv ("WPE_AUDIO_CURVE_FILE"), m_spectrumCurve);
+         m_nextResponseCheck = now + std::chrono::milliseconds (100);
+     }
+     const float dt = std::chrono::duration<float> (now - m_lastUpdate).count ();
+@@ -207,7 +208,7 @@ void PulseAudioPlaybackRecorder::update () {
+     std::fill (std::begin (audio32), std::end (audio32), 0.0f);
+     std::fill (std::begin (audio16), std::end (audio16), 0.0f);
+     for (int band = 0; band < 64; ++band) {
+-        audio64[band] = smoothSpectrum (audio64[band], m_FFTdestination64[band], dt, m_responseSpeed);
++        audio64[band] = smoothSpectrum (audio64[band], curveSpectrum (m_FFTdestination64[band], m_spectrumCurve), dt, m_responseSpeed);
+         audio32[band >> 1] = std::max (audio32[band >> 1], audio64[band]);
+         audio16[band >> 2] = std::max (audio16[band >> 2], audio64[band]);
+     }

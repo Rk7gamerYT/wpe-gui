@@ -119,7 +119,7 @@ class StaticBackground(QObject):
         props = self._engine._properties
         parts = [
             (key, path, tuple(props.engine_args(path)), tuple(sorted((k, v) for k, v in props.engine_options(path).items()
-                         if k not in ("audioResponseMode", "audioResponseSpeed"))))
+                         if k not in ("audioResponseMode", "audioResponseSpeed", "audioCurveMode", "audioCurve"))))
             for key, path in sorted(self._engine._assignments.items())
         ]
         parts.append((os.environ.get("XDG_CURRENT_DESKTOP", ""), self._settings.get("scaling"), self._settings.get("clamping"), self._settings.get("layout")))

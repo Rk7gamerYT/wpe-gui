@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -8,7 +9,7 @@ from unittest.mock import patch
 from wpe_gui.engine_locator import locate_engine
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON = ROOT / '.venv/bin/python'
+PYTHON = Path(sys.executable)
 
 
 class EngineLocatorTests(unittest.TestCase):

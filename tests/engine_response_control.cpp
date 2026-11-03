@@ -18,5 +18,16 @@ int main(int argc, char** argv) {
     assert(smoothSpectrum(0, 1, .01f, 4) > smoothSpectrum(0, 1, .01f, .25f));
     assert(smoothSpectrum(0, 1, .01f, 0) > smoothSpectrum(0, 1, .01f, 1));
     assert(smoothSpectrum(1, 0, .03f, 4) < smoothSpectrum(1, 0, .03f, .25f));
+    { std::ofstream out(path); out << 0; }
+    assert(loadSpectrumCurve(path, 1) == 1);
+    { std::ofstream out(path); out << 2; }
+    assert(loadSpectrumCurve(path, 1) == 2);
+    for (float level : {0.0f, .05f, .25f, .75f, 1.0f}) {
+        assert(std::abs(curveSpectrum(level, 1) - level) < 0.000001f);
+        assert(curveSpectrum(level, .5f) <= level);
+        assert(curveSpectrum(level, 2) >= level);
+        assert(curveSpectrum(level, .25f) >= 0 && curveSpectrum(level, 4) <= 1);
+    }
+    assert(curveSpectrum(0, 4) == 0 && curveSpectrum(1, .25f) == 1);
     std::cout << "Live control validation, manual speed and adaptive attacks: OK\n";
 }
