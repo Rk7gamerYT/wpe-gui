@@ -173,7 +173,7 @@ class PropertiesStore(QObject):
 
     ENGINE_KEY = "_engine"
     ENGINE_CHOICES = {"scaling": ("default", "stretch", "fit", "fill"), "clamping": ("clamp", "border", "repeat"),
-                      "sound": ("enabled", "muted"), "audioResponseMode": ("auto", "manual"), "audioCurveMode": ("auto", "manual")}
+                      "sound": ("enabled", "muted"), "audioResponseMode": ("auto", "manual"), "audioCurveMode": ("auto", "manual"), "audioGainMode": ("auto", "manual")}
     ENGINE_NUMERIC = {"audioGain": (0.0, 4.0), "volume": (0.0, 100.0), "audioResponseSpeed": (0.25, 4.0), "audioCurve": (0.25, 4.0)}
 
     @Slot(str, result=bool)
@@ -200,6 +200,17 @@ class PropertiesStore(QObject):
             if (item["type"] == "slider"
                     and re.search(r"audio|spectr|music|visualizer|batida", text, re.I)
                     and re.search(r"curve|curva|exponent|gamma|power", text, re.I)):
+                result.append({"key": item["key"], "label": item["label"]})
+        return result
+
+    @Slot(str, result="QVariant")
+    def audioIntensityControls(self, folder):
+        result = []
+        for item in self.load(folder):
+            text = item["key"] + " " + item["label"]
+            if (item["type"] == "slider"
+                    and re.search(r"audio|spectr|music|visualizer|batida", text, re.I)
+                    and re.search(r"gain|amount|strength|intensity|sensitivity|intens|sensib|amplitude", text, re.I)):
                 result.append({"key": item["key"], "label": item["label"]})
         return result
 

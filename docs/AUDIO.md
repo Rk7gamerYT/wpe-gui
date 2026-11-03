@@ -7,7 +7,7 @@ essa sobrescrita. A escolha vale para todas as telas que exibem o mesmo wallpape
 Wallpapers diferentes podem reproduzir áudio em cada monitor. Quando o mesmo
 wallpaper aparece em várias telas, apenas uma cópia reproduz o som, evitando eco
 e volume duplicado. Uma cópia não pausada assume o áudio se a fonte anterior for
-pausada ou fechada; a captura do espectro continua ativa nas demais cópias. Mudanças de áudio reiniciam os processos afetados após um pequeno atraso,
+pausada ou fechada; a captura do espectro continua ativa nas demais cópias. Mudanças de volume/silenciamento reiniciam os processos afetados após um pequeno atraso,
 preservando a pausa do modo economia.
 
 **Intensidade do áudio** controla a reação ao som capturado, separadamente do volume de
@@ -186,3 +186,26 @@ O fator é enviado em arquivo escalar próprio, indicado por
 `WPE_AUDIO_CURVE_FILE`, e atualizado ao vivo a cada 100 ms. Não recria a cena nem
 provoca captura do fundo. A detecção de controles nativos depende dos nomes e
 rótulos numéricos expostos, sem prometer reconhecer todo controle personalizado.
+
+## Intensidade automática e manual (patch 0010)
+
+**Intensidade do áudio** segue o mesmo padrão da curva:
+
+- **Automático** usa ganho neutro de 100%, preservando a intensidade que o próprio
+  wallpaper aplica em shaders/scripts. Propriedades numéricas expostas de ganho,
+  sensibilidade ou intensidade de áudio são identificadas no painel, sem serem
+  reescritas. Na ausência de controle próprio, permanece a resposta padrão.
+- **Manual** aceita 0%–400% por wallpaper, aplicado ao vivo sem reiniciar a cena.
+  0% remove a reação do espectro sem silenciar a reprodução de sons. O valor
+  manual é mantido ao voltar ao automático.
+
+O ajuste geral em Configurações é **Intensidade manual (padrão)**: só afeta o
+modo Manual quando não há valor específico salvo para aquele wallpaper. Alterar
+esse padrão também atualiza o espectro ao vivo. O automático não herda uma
+intensidade global aumentada. Valores antigos por wallpaper continuam salvos
+para uso ao selecionar Manual, mas não se sobrepõem ao modo Automático.
+
+O ganho é enviado em arquivo escalar próprio, indicado por `WPE_AUDIO_GAIN_FILE`,
+com validação de números finitos entre 0 e 4. A opção CLI `--audio-gain` continua
+funcionando para execução direta do motor sem o arquivo de controle. Volume,
+curvatura e velocidade de resposta continuam independentes da intensidade.

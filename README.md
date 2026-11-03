@@ -54,7 +54,7 @@ Versão inicial (0.1). Já faz:
 - **Modo economia:** pausa o wallpaper só no monitor que tiver um app em tela cheia ou maximizado (pelas extensões GNOME ou KWin no KDE)
 - **Bandeja do sistema:** fechar a janela mantém o app e os wallpapers rodando; o ícone abre a interface de novo (há a opção "Iniciar escondido na bandeja") (no GNOME, usa a extensão AppIndicator, já ativa no Ubuntu)
 - **Fundo estático:** ao fechar o app, o desktop fica com uma imagem do wallpaper em vez de voltar ao fundo antigo (GNOME e KDE Plasma/Wayland)
-- **Intensidade do áudio:** global e por wallpaper, para os que reagem ao som
+- **Intensidade do áudio:** automática pelo padrão do wallpaper ou manual por wallpaper, com atualização ao vivo
 - Configurações: FPS, volume, mudo, escala, pausa em tela cheia, modo janela
 
 Em Configurações, **Iniciar com o sistema** abre o app ao entrar na sessão do usuário. Mantenha **Restaurar wallpapers ao abrir o app** ligado para reaplicar os wallpapers salvos. Desligar a inicialização automática remove a entrada de autostart.
@@ -94,7 +94,7 @@ ln -s "$PWD/wpe-gui.sh" ~/.local/bin/wpe-gui
 Duas funções dependem de patches no `linux-wallpaperengine`, em `patches/` (feitos sobre uma versão fixa do motor; o `install.sh` e o [guia de instalação](docs/INSTALL.md) já cuidam disso):
 
 - **`0001` — reparo de vetores nos shaders:** o compilador do Windows aceita `vec4 * vec2` (corta o vetor maior) e o GLSL não. Sem o patch, wallpapers que fazem isso ficam pretos.
-- **`0002` — `--audio-gain`:** multiplica o espectro de áudio que os wallpapers recebem; é o que a "Intensidade do áudio" usa.
+- **`0002` — `--audio-gain`:** multiplica o espectro de áudio que os wallpapers recebem; fornece o ganho inicial para execução direta do motor; o app atualizado ajusta a intensidade ao vivo pelos patches posteriores.
 
 Com o motor sem os patches, o app funciona, mas esses dois recursos não têm efeito.
 

@@ -116,7 +116,7 @@ ScrollView {
             onMoved: settings.set("volume", Math.round(value))
         }
 
-        Label { text: "Intensidade do áudio (padrão)" }
+        Label { text: "Intensidade manual (padrão)" }
         RowLayout {
             Layout.fillWidth: true
             Slider {
@@ -134,7 +134,7 @@ ScrollView {
             wrapMode: Text.Wrap
             opacity: 0.6
             font.pixelSize: 11
-            text: "Vale para wallpapers que reagem ao som. Cada wallpaper pode ter a sua, no painel da direita."
+            text: "Usada quando a intensidade do wallpaper está no modo Manual, sem valor próprio. No Automático, respeita o padrão do wallpaper."
         }
 
         Label { text: "Silenciar" }

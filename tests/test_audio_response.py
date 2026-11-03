@@ -111,3 +111,48 @@ class AudioResponseTests(unittest.TestCase):
         for value in ['nan','inf','invalid']:
             self.props.setEngineOption(self.folder, 'audioCurve', value)
             self.assertEqual(self.props.engineOption(self.folder, 'audioCurve'), '0.25')
+
+    def test_intensity_is_live_with_zero_and_automatic_uses_native_default(self):
+        self.engine._procs = {'A': Mock()}
+        self.engine._assignments = {'A': self.folder}
+        self.engine._render_signatures[self.folder] = self.engine._render_signature(self.folder)
+        self.props.setEngineOption(self.folder, 'audioGain', '3')
+        file = Path(self.engine._sync_audio_response(self.folder)).with_suffix('.gain.json')
+        self.assertEqual(json.loads(file.read_text()), 1)
+        self.props.setEngineOption(self.folder, 'audioGainMode', 'manual')
+        self.assertEqual(json.loads(file.read_text()), 3)
+        self.props.setEngineOption(self.folder, 'audioGain', '0')
+        self.assertEqual(json.loads(file.read_text()), 0)
+        self.props.setEngineOption(self.folder, 'audioGainMode', 'auto')
+        self.assertEqual(json.loads(file.read_text()), 1)
+        self.assertFalse(self.engine._pending)
+        self.assertFalse(self.engine._reapply.isActive())
+
+    def test_global_intensity_only_updates_manual_fallback_without_restart(self):
+        self.engine._procs = {'A': Mock()}
+        self.engine._assignments = {'A': self.folder}
+        self.engine._render_signatures[self.folder] = self.engine._render_signature(self.folder)
+        self.props.setEngineOption(self.folder, 'audioGainMode', 'manual')
+        file = Path(self.engine._sync_audio_response(self.folder)).with_suffix('.gain.json')
+        self.engine._settings.set('audioGain', 2)
+        self.assertEqual(json.loads(file.read_text()), 2)
+        self.assertFalse(self.engine._reapply.isActive())
+        self.props.setEngineOption(self.folder, 'audioGain', '0')
+        self.engine._settings.set('audioGain', 3)
+        self.assertEqual(json.loads(file.read_text()), 0)
+        self.props.setEngineOption(self.folder, 'audioGainMode', 'auto')
+        self.engine._settings.set('audioGain', 4)
+        self.assertEqual(json.loads(file.read_text()), 1)
+
+    def test_native_intensity_does_not_modify_volume_or_native_properties(self):
+        project = {'title':'gain', 'type':'scene', 'general':{'properties':{
+            'audio_sensitivity': {'type':'slider','text':'Audio sensitivity','value':1.5},
+            'audio_volume': {'type':'slider','text':'Audio volume','value':100}}}}
+        file = Path(self.folder)/'project.json'; file.write_text(json.dumps(project))
+        self.assertEqual(self.props.audioIntensityControls(self.folder),
+                         [{'key':'audio_sensitivity','label':'Audio sensitivity'}])
+        self.props.setEngineOption(self.folder, 'audioGainMode', 'auto')
+        self.engine._sync_audio_response(self.folder)
+        self.assertEqual(json.loads(file.read_text()), project)
+        self.assertEqual(self.props.engine_args(self.folder), [])
+        self.assertEqual(self.engine._settings.get('volume'), 100)

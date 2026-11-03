@@ -1,0 +1,51 @@
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/AudioResponseControl.h b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioResponseControl.h
+index c63331b..89824ed 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/AudioResponseControl.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioResponseControl.h
+@@ -18,4 +18,13 @@ inline float loadSpectrumCurve (const char* path, float current) {
+     return value > 0.0f ? value : current;
+ }
+ 
++inline float loadSpectrumGain (const char* path, float current) {
++    if (!path || !*path) return current;
++    std::ifstream input (path);
++    float value;
++    if (!(input >> value) || !std::isfinite (value)) return current;
++    input >> std::ws;
++    return input.eof () && value >= 0.0f && value <= 4.0f ? value : current;
++}
++
+ }
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+index d1b9709..7b91f40 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+@@ -41,6 +41,7 @@ private:
+     SpectrumDynamics m_dynamics;
+     float m_responseSpeed = 0.0f;
+     float m_spectrumCurve = 1.0f;
++    float m_spectrumGain = PlaybackRecorder::gain;
+     std::chrono::steady_clock::time_point m_nextResponseCheck {};
+     std::chrono::steady_clock::time_point m_lastUpdate = std::chrono::steady_clock::now ();
+     std::chrono::steady_clock::time_point m_lastAudio = std::chrono::steady_clock::now ();
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+index ab17764..d7825ac 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+@@ -181,6 +181,7 @@ void PulseAudioPlaybackRecorder::update () {
+     if (now >= m_nextResponseCheck) {
+         m_responseSpeed = loadResponseSpeed (std::getenv ("WPE_AUDIO_RESPONSE_FILE"), m_responseSpeed);
+         m_spectrumCurve = loadSpectrumCurve (std::getenv ("WPE_AUDIO_CURVE_FILE"), m_spectrumCurve);
++        m_spectrumGain = loadSpectrumGain (std::getenv ("WPE_AUDIO_GAIN_FILE"), m_spectrumGain);
+         m_nextResponseCheck = now + std::chrono::milliseconds (100);
+     }
+     const float dt = std::chrono::duration<float> (now - m_lastUpdate).count ();
+@@ -199,7 +200,7 @@ void PulseAudioPlaybackRecorder::update () {
+         float fastPowers[64];
+         spectrumPowers (m_fastFFTinfo, FAST_BUFFER_SIZE, 44100.0f, fastPowers);
+         mergeSpectrumWindows (powers, fastPowers);
+-        m_dynamics.levels (powers, PlaybackRecorder::gain, audioDt, m_FFTdestination64);
++        m_dynamics.levels (powers, m_spectrumGain, audioDt, m_FFTdestination64);
+     } else if (std::chrono::duration<float> (now - m_lastAudio).count () > 0.15f) {
+         std::fill (std::begin (m_FFTdestination64), std::end (m_FFTdestination64), 0.0f);
+     }

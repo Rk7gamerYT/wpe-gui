@@ -72,7 +72,7 @@ class Engine(QObject):
         args = self._properties.engine_args(path)
         args = args if isinstance(args, (tuple, list)) else []
         return (tuple(args), tuple(sorted((key, value) for key, value in options.items()
-                if key not in ("audioResponseMode", "audioResponseSpeed", "audioCurveMode", "audioCurve"))))
+                if key not in ("audioResponseMode", "audioResponseSpeed", "audioCurveMode", "audioCurve", "audioGainMode", "audioGain"))))
 
     def _sync_audio_response(self, path):
         options = self._properties.engine_options(path)
@@ -87,6 +87,11 @@ class Engine(QObject):
             curve = float(options.get("audioCurve") or 1.0)
             if not math.isfinite(curve): curve = 1.0
             curve = min(4.0, max(0.25, curve)) if options.get("audioCurveMode") == "manual" else 1.0
+            raw_gain = options.get("audioGain")
+            gain = float(self._settings.get("audioGain") if raw_gain in (None, "") else raw_gain)
+            if not math.isfinite(gain): gain = 1.0
+            gain = min(4.0, max(0.0, gain)) if options.get("audioGainMode") == "manual" else 1.0
+            write_json(target.with_suffix(".gain.json"), gain)
             write_json(target.with_suffix(".curve.json"), curve)
             write_json(target, speed)
             return str(target)
@@ -105,6 +110,10 @@ class Engine(QObject):
             ("volume", "silent", "autoMute", "audioGain"), self._audio_settings, audio) if old != new]
         self._log.info("action=audio_settings_changed keys=%s targets=%s", changed, sorted(self._procs))
         self._audio_settings = audio
+        if changed == ["audioGain"]:
+            for path in set(self._assignments.values()):
+                self._sync_audio_response(path)
+            return
         self._pending.update(self._procs)
         if self._pending:
             self._reapply.start()
@@ -228,13 +237,6 @@ class Engine(QObject):
         if native_wayland():
             args += ["--layer", "background"]
 
-        if library.audio_responsive(path):
-            try:
-                gain = float(options.get("audioGain") or s.get("audioGain"))
-            except (TypeError, ValueError):
-                gain = 1.0
-            if gain != 1.0:
-                args += ["--audio-gain", f"{gain:g}"]
         args += [
             "--scaling", options.get("scaling") or s.get("scaling"),
             "--clamp", options.get("clamping") or s.get("clamping"),
@@ -391,6 +393,7 @@ class Engine(QObject):
         if control:
             env.insert("WPE_AUDIO_RESPONSE_FILE", control)
             env.insert("WPE_AUDIO_CURVE_FILE", str(Path(control).with_suffix(".curve.json")))
+            env.insert("WPE_AUDIO_GAIN_FILE", str(Path(control).with_suffix(".gain.json")))
         self._render_signatures[path] = self._render_signature(path)
         if self.windowed():
             # GLEW can't initialise on native Wayland; run the window through XWayland

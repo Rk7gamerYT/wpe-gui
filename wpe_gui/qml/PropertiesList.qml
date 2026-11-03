@@ -10,6 +10,7 @@ ColumnLayout {
     property var items: []
     property var nativeAudioTiming: []
     property var nativeAudioCurve: []
+    property var nativeAudioIntensity: []
     readonly property bool audioResponsive: folder !== "" && properties.audioResponsive(folder)
     spacing: 10
     property int optionRevision: 0
@@ -30,6 +31,7 @@ ColumnLayout {
         items = folder ? properties.load(folder) : []
         nativeAudioTiming = folder ? properties.audioTimingControls(folder) : []
         nativeAudioCurve = folder ? properties.audioCurveControls(folder) : []
+        nativeAudioIntensity = folder ? properties.audioIntensityControls(folder) : []
     }
     // Bool/combo values can show or hide other properties (conditions), so they rebuild the list
     function commit(key, type, value) {
@@ -81,20 +83,37 @@ ColumnLayout {
                 onClicked: properties.setEngineOption(root.folder, "volume", "")
             }
         }
-        // Only wallpapers that react to the sound playing on the computer get this
         Label { text: "Intensidade do áudio"; visible: root.audioResponsive }
-        RowLayout {
+        ComboBox {
             visible: root.audioResponsive
+            Layout.fillWidth: true
+            model: ["Automático", "Manual"]
+            currentIndex: root.engineOption("audioGainMode") === "manual" ? 1 : 0
+            onActivated: properties.setEngineOption(root.folder, "audioGainMode", currentIndex ? "manual" : "auto")
+        }
+        Label { text: "Intensidade manual"; visible: root.audioResponsive && root.engineOption("audioGainMode") === "manual" }
+        RowLayout {
+            visible: root.audioResponsive && root.engineOption("audioGainMode") === "manual"
             Layout.fillWidth: true
             Slider {
                 id: gainSlider
                 Layout.fillWidth: true
-                from: 0; to: 300; stepSize: 5
-                value: 100 * parseFloat(root.engineOption("audioGain") || settings.value("audioGain"))
+                from: 0; to: 400; stepSize: 5
+                value: 100 * Number(root.engineOption("audioGain") || settings.value("audioGain"))
                 onPressedChanged: if (!pressed) properties.setEngineOption(root.folder, "audioGain", String(value / 100))
                 onMoved: if (!pressed) properties.setEngineOption(root.folder, "audioGain", String(value / 100))
             }
-            Label { text: Math.round(gainSlider.value) + "%"; Layout.preferredWidth: 38; horizontalAlignment: Text.AlignRight }
+            Label { text: Math.round(gainSlider.value) + "%" }
+        }
+        Label {
+            visible: root.audioResponsive
+            Layout.columnSpan: 2; Layout.fillWidth: true
+            wrapMode: Text.Wrap; opacity: 0.7; font.pixelSize: 11
+            text: root.engineOption("audioGainMode") === "manual"
+                ? "Ajusta a força da reação sem reiniciar a cena. 0% desliga a reação, sem silenciar a música."
+                : (root.nativeAudioIntensity.length
+                    ? "Intensidade própria detectada: respeita o ajuste do wallpaper nas propriedades abaixo."
+                    : "Preserva a intensidade interna do wallpaper. Sem ajuste próprio, usa a resposta padrão.")
         }
         Label { text: "Sincronização do áudio"; visible: root.audioResponsive && !root.nativeAudioTiming.length }
         ComboBox {

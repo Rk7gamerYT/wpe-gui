@@ -29,5 +29,13 @@ int main(int argc, char** argv) {
         assert(curveSpectrum(level, .25f) >= 0 && curveSpectrum(level, 4) <= 1);
     }
     assert(curveSpectrum(0, 4) == 0 && curveSpectrum(1, .25f) == 1);
+    for (float value : {0.0f, 0.1f, 1.0f, 4.0f}) {
+        { std::ofstream out(path); out << value; }
+        assert(loadSpectrumGain(path, 2) == value);
+    }
+    for (const char* value : {"nan", "inf", "-1", "5", "1x", ""}) {
+        { std::ofstream out(path); out << value; }
+        assert(loadSpectrumGain(path, 2) == 2);
+    }
     std::cout << "Live control validation, manual speed and adaptive attacks: OK\n";
 }

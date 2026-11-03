@@ -58,6 +58,8 @@ if os.environ.get("WPE_UI_AUDIO_MANUAL") == "1" and folder:
     properties.setEngineOption(folder, "audioResponseMode", "manual")
 if os.environ.get("WPE_UI_CURVE_MANUAL") == "1" and folder:
     properties.setEngineOption(folder, "audioCurveMode", "manual")
+if os.environ.get("WPE_UI_GAIN_MANUAL") == "1" and folder:
+    properties.setEngineOption(folder, "audioGainMode", "manual")
 root.setProperty("selected", {"title": "t", "preview": "", "path": folder, "wtype": "scene", "description": "d", "tags": ""})
 
 

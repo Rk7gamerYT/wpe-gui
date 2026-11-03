@@ -22,7 +22,7 @@ class AudioSettingsTests(unittest.TestCase):
         self.addCleanup(self.engine._reapply.stop)
 
     def test_audio_controls_restart_running_wallpapers_with_new_settings(self):
-        for key, value in [('volume', 50), ('silent', True), ('autoMute', True), ('audioGain', 2)]:
+        for key, value in [('volume', 50), ('silent', True), ('autoMute', True)]:
             with self.subTest(key=key):
                 self.engine._procs = {'DP-5': Mock()}
                 self.engine._assignments = {'DP-5': '/wallpaper'}
