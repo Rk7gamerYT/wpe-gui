@@ -16,7 +16,7 @@ int main() {
     std::array<kiss_fft_cpx, size / 2 + 1> fft{};
     float powers[64];
     int previous = -1;
-    for (int bin : {6, 93, 929}) {
+    for (int bin : {2, 3, 6, 93, 929, 1672}) {
         for (int i = 0; i < size; ++i) {
             const float window = 0.5f * (1 - std::cos(2 * M_PI * i / size));
             samples[i] = std::sin(2 * M_PI * bin * i / size) * window;
@@ -36,6 +36,13 @@ int main() {
         std::cout << frequency << " Hz -> band " << peak << "\n";
         previous = peak;
     }
+    // A bass tone also reaches sub-bin logarithmic bands instead of leaving
+    // permanent holes at the start of the visualizer.
+    for (int i = 0; i < size; ++i)
+        samples[i] = std::sin(2 * M_PI * 2 * i / size) * (0.5f * (1 - std::cos(2 * M_PI * i / size)));
+    kiss_fftr(cfg, samples.data(), fft.data());
+    WallpaperEngine::Audio::Drivers::Recorders::spectrumPowers(fft.data(), size, rate, powers);
+    assert(powers[0] > 0.5f && powers[1] > 0.5f);
     fft.fill({0, 0});
     fft[0].r = 100; // DC never becomes bass.
     fft[10].r = std::numeric_limits<float>::quiet_NaN();

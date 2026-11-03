@@ -1,0 +1,325 @@
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+index 9373a46..28d267d 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+@@ -6,14 +6,6 @@
+ #include <cstring>
+ #include <glm/common.hpp>
+ 
+-float movetowards (float current, float target, float maxDelta) {
+-    if (abs (target - current) <= maxDelta) {
+-	return target;
+-    }
+-
+-    return current + glm::sign (target - current) * maxDelta;
+-}
+-
+ namespace WallpaperEngine::Audio::Drivers::Recorders {
+ void pa_stream_notify_cb (pa_stream* stream, void* /*userdata*/) {
+     switch (pa_stream_get_state (stream)) {
+@@ -45,25 +37,12 @@ void pa_stream_read_cb (pa_stream* stream, const size_t /*nbytes*/, void* userda
+ 	return;
+     }
+ 
+-    if (data == nullptr && currentSize > 0) {
+-	// Hole in the buffer. We must drop it.
+-	if (pa_stream_drop (stream) != 0) {
+-	    sLog.error ("Failed to drop a hole while capturing!");
+-	    return;
+-	}
+-    } else if (currentSize > 0 && data) {
+-        size_t offset = 0;
+-        while (offset < currentSize) {
+-            const size_t count = std::min (currentSize - offset, WAVE_BUFFER_SIZE - recorder->currentWritePointer);
+-            memcpy (recorder->audioBufferTmp + recorder->currentWritePointer, data + offset, count);
+-            recorder->currentWritePointer += count;
+-            offset += count;
+-            if (recorder->currentWritePointer == WAVE_BUFFER_SIZE) {
+-                std::swap (recorder->audioBuffer, recorder->audioBufferTmp);
+-                recorder->currentWritePointer = 0;
+-                recorder->fullFrameReady = true;
+-            }
+-        }
++    // Float PCM preserves quiet detail; holes contribute silence, never stale samples.
++    const size_t count = currentSize / sizeof (float);
++    for (size_t i = 0; i < count; ++i) {
++        float sample = 0.0f;
++        if (data) memcpy (&sample, data + i * sizeof (float), sizeof (float));
++        recorder->samples.push (sample);
+     }
+ 
+     if (pa_stream_drop (stream) != 0) {
+@@ -84,11 +63,10 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
+     if (recorder->captureStream && recorder->monitorName == monitor_name
+         && pa_stream_get_state (recorder->captureStream) != PA_STREAM_FAILED) return;
+     recorder->monitorName = monitor_name;
+-    recorder->currentWritePointer = 0;
+-    recorder->fullFrameReady = false;
++    recorder->samples.clear ();
+ 
+     pa_sample_spec spec;
+-    spec.format = PA_SAMPLE_U8;
++    spec.format = PA_SAMPLE_FLOAT32NE;
+     spec.rate = 44100;
+     spec.channels = 1;
+ 
+@@ -105,10 +83,10 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
+     // setup latency
+     pa_buffer_attr attr {};
+ 
+-    // 10 = latency msecs, 750 = max msecs to store
++    // Deliver 10 ms chunks and cap queued capture data at 100 ms.
+     size_t bytesPerSec = pa_bytes_per_second (&spec);
+     attr.fragsize = bytesPerSec * 10 / 1000;
+-    attr.maxlength = attr.fragsize + bytesPerSec * 750 / 1000;
++    attr.maxlength = bytesPerSec * 100 / 1000;
+ 
+     if (pa_stream_connect_record (recorder->captureStream, monitor_name.c_str (), &attr, PA_STREAM_ADJUST_LATENCY)
+ 	!= 0) {
+@@ -132,7 +110,7 @@ void pa_context_notify_cb (pa_context* ctx, void* userdata) {
+ 		pa_context_set_subscribe_callback (ctx, pa_context_subscribe_cb, userdata);
+ 		// set events mask and enable event callback.
+ 		pa_operation* o = pa_context_subscribe (
+-		    ctx, static_cast<pa_subscription_mask_t> (PA_SUBSCRIPTION_MASK_SINK | PA_SUBSCRIPTION_MASK_SOURCE),
++		    ctx, static_cast<pa_subscription_mask_t> (PA_SUBSCRIPTION_MASK_SINK | PA_SUBSCRIPTION_MASK_SERVER),
+ 		    nullptr, nullptr
+ 		);
+ 
+@@ -159,9 +137,7 @@ void pa_context_notify_cb (pa_context* ctx, void* userdata) {
+ 
+ PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
+     m_captureData (
+-	{ .kisscfg = kiss_fftr_alloc (WAVE_BUFFER_SIZE, 0, nullptr, nullptr),
+-	  .audioBuffer = new uint8_t[WAVE_BUFFER_SIZE],
+-	  .audioBufferTmp = new uint8_t[WAVE_BUFFER_SIZE] }
++	{ .kisscfg = kiss_fftr_alloc (WAVE_BUFFER_SIZE, 0, nullptr, nullptr) }
+     ) {
+     this->m_mainloop = pa_mainloop_new ();
+     this->m_mainloopApi = pa_mainloop_get_api (this->m_mainloop);
+@@ -185,8 +161,6 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
+ 	pa_stream_unref (m_captureData.captureStream);
+     }
+ 
+-    delete[] this->m_captureData.audioBufferTmp;
+-    delete[] this->m_captureData.audioBuffer;
+     free (this->m_captureData.kisscfg);
+ 
+     pa_context_disconnect (this->m_context);
+@@ -197,56 +171,31 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
+ void PulseAudioPlaybackRecorder::update () {
+     for (int i = 0; i < 8 && pa_mainloop_iterate (this->m_mainloop, 0, nullptr) > 0; ++i) { }
+ 
+-    // interpolate current values to the destination
+-    for (int i = 0; i < 64; i++) {
+-	this->audio64[i] = movetowards (this->audio64[i], this->m_FFTdestination64[i], 0.3f);
+-	if (i >= 32) {
+-	    continue;
+-	}
+-	this->audio32[i] = movetowards (this->audio32[i], this->m_FFTdestination32[i], 0.3f);
+-	if (i >= 16) {
+-	    continue;
+-	}
+-	this->audio16[i] = movetowards (this->audio16[i], this->m_FFTdestination16[i], 0.3f);
+-    }
+-
+-    if (!this->m_captureData.fullFrameReady) {
+-	return;
+-    }
+-
+-    this->m_captureData.fullFrameReady = false;
+-
+-    // Remove DC and apply a Hann window to reduce leakage between frequency bands.
+-    float mean = 0.0f;
+-    for (int i = 0; i < WAVE_BUFFER_SIZE; ++i) mean += this->m_captureData.audioBuffer[i];
+-    mean /= WAVE_BUFFER_SIZE;
+-    for (int i = 0; i < WAVE_BUFFER_SIZE; i++) {
+-        const float window = 0.5f * (1.0f - std::cos (2.0f * M_PI * i / WAVE_BUFFER_SIZE));
+-        this->m_audioFFTbuffer[i] = (this->m_captureData.audioBuffer[i] - mean) / 128.0f * window;
+-    }
+-
+-    // perform full fft pass
+-    kiss_fftr (this->m_captureData.kisscfg, this->m_audioFFTbuffer, this->m_FFTinfo);
+-
+-    float powers[64];
+-    spectrumPowers (this->m_FFTinfo, WAVE_BUFFER_SIZE, 44100.0f, powers);
+-    std::fill (std::begin (this->m_FFTdestination32), std::end (this->m_FFTdestination32), 0.0f);
+-    std::fill (std::begin (this->m_FFTdestination16), std::end (this->m_FFTdestination16), 0.0f);
+-    // Normalize -60..0 dBFS, apply gain, then pool adjacent bands without losing peaks.
+-    for (int band = 0; band < 64; band++) {
+-	float f1;
+-	float f2 = std::max (1.0f, powers[band] * 1000000.0f);
+-	f1 = 0.0f;
+-
+-	if (f2 > 0.0f) {
+-	    f1 = 0.35f * log10 (f2) * PlaybackRecorder::gain;
+-	}
+-
+-	this->m_FFTdestination64[band]
+-            = std::clamp (f1 / 2.1f, 0.0f, 1.0f);
+-        this->m_FFTdestination32[band >> 1] = std::max (this->m_FFTdestination32[band >> 1], this->m_FFTdestination64[band]);
+-        this->m_FFTdestination16[band >> 2] = std::max (this->m_FFTdestination16[band >> 2], this->m_FFTdestination64[band]);
++    const auto now = std::chrono::steady_clock::now ();
++    const float dt = std::chrono::duration<float> (now - m_lastUpdate).count ();
++    m_lastUpdate = now;
++    auto& samples = m_captureData.samples;
++    if (samples.dirty) {
++        const float audioDt = std::chrono::duration<float> (now - m_lastAudio).count ();
++        m_lastAudio = now;
++        samples.dirty = false;
++        samples.windowed (m_audioFFTbuffer);
++        kiss_fftr (m_captureData.kisscfg, m_audioFFTbuffer, m_FFTinfo);
++        float powers[64];
++        spectrumPowers (m_FFTinfo, WAVE_BUFFER_SIZE, 44100.0f, powers);
++        m_dynamics.levels (powers, PlaybackRecorder::gain, audioDt, m_FFTdestination64);
++    } else if (std::chrono::duration<float> (now - m_lastAudio).count () > 0.15f) {
++        std::fill (std::begin (m_FFTdestination64), std::end (m_FFTdestination64), 0.0f);
++    }
++    // Time-based attack/release keeps the response consistent at any render FPS.
++    // Pool after smoothing so scripts at every resolution see the same envelope.
++    std::fill (std::begin (audio32), std::end (audio32), 0.0f);
++    std::fill (std::begin (audio16), std::end (audio16), 0.0f);
++    for (int band = 0; band < 64; ++band) {
++        audio64[band] = smoothSpectrum (audio64[band], m_FFTdestination64[band], dt);
++        audio32[band >> 1] = std::max (audio32[band >> 1], audio64[band]);
++        audio16[band >> 2] = std::max (audio16[band >> 2], audio64[band]);
+     }
+ }
+ 
+-} // namespace WallpaperEngine::Audio::Drivers::Recorders
+\ No newline at end of file
++} // namespace WallpaperEngine::Audio::Drivers::Recorders
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+index 24f5c34..c595332 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+@@ -4,6 +4,8 @@
+ #include "kiss_fftr.h"
+ #include <pulse/pulseaudio.h>
+ #include <string>
++#include <chrono>
++#include "AudioAnalysis.h"
+ 
+ #define WAVE_BUFFER_SIZE 4096
+ 
+@@ -17,10 +19,7 @@ public:
+      */
+     struct PulseAudioData {
+ 	kiss_fftr_cfg kisscfg;
+-	uint8_t* audioBuffer;
+-	uint8_t* audioBufferTmp;
+-	size_t currentWritePointer;
+-	bool fullFrameReady;
++	AudioSampleWindow<WAVE_BUFFER_SIZE> samples;
+ 	pa_stream* captureStream;
+         std::string monitorName;
+     };
+@@ -36,6 +35,9 @@ private:
+     pa_context* m_context;
+     PulseAudioData m_captureData;
+ 
++    SpectrumDynamics m_dynamics;
++    std::chrono::steady_clock::time_point m_lastUpdate = std::chrono::steady_clock::now ();
++    std::chrono::steady_clock::time_point m_lastAudio = std::chrono::steady_clock::now ();
+     float m_audioFFTbuffer[WAVE_BUFFER_SIZE] = { 0.0f };
+     kiss_fft_cpx m_FFTinfo[WAVE_BUFFER_SIZE / 2 + 1] = { { .r = 0.0f, .i = 0.0f } };
+     float m_FFTdestination64[64] = { 0 };
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/Spectrum.h b/src/WallpaperEngine/Audio/Drivers/Recorders/Spectrum.h
+index a02faa8..ce11a62 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/Spectrum.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/Spectrum.h
+@@ -21,5 +21,21 @@ void spectrumPowers (const Complex* fft, int samples, float rate, float (&powers
+         const float power = (fft[bin].r * fft[bin].r + fft[bin].i * fft[bin].i) * normalization;
+         if (std::isfinite (power)) powers[band] = std::max (powers[band], power);
+     }
++    // Sub-bin bass bands would otherwise remain permanently empty at this FFT size.
++    // Interpolate their center frequency; populated bands retain their real peak.
++    for (int band = 0; band < 64; ++band) {
++        const float lo = 20.0f * std::exp (logRange * band / 64.0f) * samples / rate;
++        const float hi = 20.0f * std::exp (logRange * (band + 1) / 64.0f) * samples / rate;
++        if (std::ceil (lo) < hi) continue;
++        const float center = std::sqrt (lo * hi);
++        const int left = std::clamp (static_cast<int> (center), 1, samples / 2 - 1);
++        auto binPower = [&] (int bin) {
++            const float value = (fft[bin].r * fft[bin].r + fft[bin].i * fft[bin].i) * normalization;
++            return std::isfinite (value) ? value : 0.0f;
++        };
++        const float fraction = std::clamp (center - left, 0.0f, 1.0f);
++        powers[band] = binPower (left) * (1.0f - fraction) + binPower (left + 1) * fraction;
++    }
++
+ }
+ } // namespace WallpaperEngine::Audio::Drivers::Recorders
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h
+new file mode 100644
+index 0000000..ee92c3e
+--- /dev/null
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h
+@@ -0,0 +1,68 @@
++#pragma once
++#include <algorithm>
++#include <array>
++#include <cmath>
++#include <cstddef>
++
++namespace WallpaperEngine::Audio::Drivers::Recorders {
++// Single-threaded rolling capture window, shared by the PA callbacks and render tick.
++template <size_t Size> struct AudioSampleWindow {
++    std::array<float, Size> data {};
++    size_t next = 0;
++    bool dirty = false;
++    void clear () { data.fill (0.0f); next = 0; dirty = false; }
++    void push (float value) {
++        data[next] = std::isfinite (value) ? std::clamp (value, -1.0f, 1.0f) : 0.0f;
++        next = (next + 1) % Size;
++        dirty = true;
++    }
++    void windowed (float* output) const {
++        float mean = 0.0f;
++        for (float value : data) mean += value;
++        mean /= Size;
++        for (size_t i = 0; i < Size; ++i) {
++            const float window = 0.5f * (1.0f - std::cos (2.0f * 3.14159265358979323846f * i / Size));
++            output[i] = (data[(next + i) % Size] - mean) * window;
++        }
++    }
++};
++inline float spectrumLevel (float power, float gain) {
++    if (!std::isfinite (power) || power <= 0.0f || !std::isfinite (gain) || gain <= 0.0f) return 0.0f;
++    // -72 dBFS floor retains quieter harmonics without auto-amplifying silence.
++    return std::clamp ((10.0f * std::log10 (power) + 72.0f) / 72.0f * gain, 0.0f, 1.0f);
++}
++// Relative spectral shape plus positive spectral flux: equal-volume notes and
++// percussion still move different bands. A bounded shared reference preserves
++// the relation between bands and prevents background noise from filling the display.
++struct SpectrumDynamics {
++    float reference = 0.01f;
++    std::array<float, 64> previous {};
++    void levels (const float (&powers)[64], float gain, float dt, float (&output)[64]) {
++        float peak = 0.0f;
++        for (float power : powers) if (std::isfinite (power)) peak = std::max (peak, power);
++        const float target = std::max (peak, 0.0001f);
++        const float seconds = target > reference ? 0.025f : 0.8f;
++        reference += (target - reference) * -std::expm1 (-std::max (0.0f, dt) / seconds);
++        reference = std::max (reference, 0.0001f);
++        for (int band = 0; band < 64; ++band) {
++            const float power = std::isfinite (powers[band]) ? std::max (0.0f, powers[band]) : 0.0f;
++            const float shape = std::pow (std::clamp (power / reference, 0.0f, 1.0f), 0.35f);
++            const float flux = std::sqrt (std::clamp ((power - previous[band]) / reference, 0.0f, 1.0f));
++            const float gate = std::clamp ((power - 0.00000006f) / 0.00000094f, 0.0f, 1.0f);
++            const float activity = (0.75f * shape + 0.25f * flux) * gate;
++            // Compress high sensitivity smoothly instead of clipping every strong band.
++            output[band] = std::isfinite (gain) && gain > 0.0f
++                ? std::clamp (activity * gain / (1.0f + std::max (0.0f, gain - 1.0f) * activity), 0.0f, 1.0f) : 0.0f;
++            previous[band] = power;
++        }
++    }
++};
++inline float smoothSpectrum (float current, float target, float dt) {
++    if (!std::isfinite (current)) current = 0.0f;
++    if (!std::isfinite (target)) target = 0.0f;
++    if (!std::isfinite (dt) || dt <= 0.0f) return current;
++    const float seconds = target > current ? 0.018f : 0.140f;
++    const float alpha = -std::expm1 (-dt / seconds);
++    return std::clamp (current + (target - current) * alpha, 0.0f, 1.0f);
++}
++} // namespace WallpaperEngine::Audio::Drivers::Recorders

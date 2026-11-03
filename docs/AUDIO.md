@@ -15,17 +15,30 @@ reprodução. Silenciar um wallpaper não desliga o espectro da música tocada p
 
 ## Motor e SceneScript
 
-Os patches `0003` e `0004` completam o caminho de áudio para os scripts:
+Os patches `0003`, `0004` e `0005` completam o caminho de áudio para os scripts:
 
 - `engine.registerAudioBuffers(16|32|64)` fornece `Float32Array`s persistentes em `left`,
   `right` e `average`, atualizados antes de cada frame. Resoluções inválidas geram erro.
 - O gravador atual captura uma mistura mono: os três canais recebem os mesmos valores.
-- A FFT usa 4096 amostras a 44,1 kHz, remove DC e aplica janela Hann. As 64 bandas
-  cobrem 20 Hz–20 kHz em escala logarítmica; as resoluções menores agrupam bandas
-  adjacentes pelo pico. O nível é normalizado entre −60 e 0 dBFS, multiplicado pela
-  intensidade e limitado a 0–1. Intensidade zero deixa todas as bandas em zero.
-- Essa distribuição de frequências é uma política explícita do motor Linux; a
-  documentação pública do Wallpaper Engine não especifica seus limites exatos por banda.
+- O patch `0005` captura PCM float de 32 bits em blocos de 10 ms, preservando
+  detalhes baixos que desapareciam na quantização de 8 bits. Uma janela circular
+  de 4096 amostras é analisada sempre que chegam dados, sem esperar outro bloco
+  completo de aproximadamente 93 ms. A janela mantém essa duração; os resultados
+  consecutivos se sobrepõem e continuam sujeitos à resolução temporal da FFT.
+- A FFT a 44,1 kHz remove DC e aplica janela Hann. As 64 bandas cobrem 20 Hz–20 kHz
+  em escala logarítmica. Bandas graves menores que um bin recebem interpolação
+  entre bins vizinhos; isso evita lacunas, sem criar resolução de frequência nova.
+- A reação combina a forma do espectro (75%) e o aumento de energia de cada banda
+  entre análises (25%, fluxo espectral positivo). Uma referência comum se adapta
+  ao nível ao longo do tempo, preservando diferenças entre frequências. Há um
+  limite mínimo de referência e um gate de ruído; não é detecção de BPM nem
+  separação de instrumentos. A intensidade regula a resposta; acima de 100%, uma compressão suave evita
+  que todas as bandas fortes fiquem travadas no máximo.
+- O movimento usa ataque de 18 ms e decaimento de 140 ms, calculados pelo tempo
+  real entre frames. As resoluções de 32/16 bandas agrupam o pico depois da
+  suavização. Sem dados novos por 150 ms, o espectro decai até zero.
+- Essa distribuição e resposta são políticas do motor Linux, não uma reprodução
+  exata do processamento interno do Wallpaper Engine para Windows.
 - Scripts passam a executar seus módulos, `init` e `update`, com o contexto da camada
   correspondente. Vetores e escrita de propriedades alimentam a geometria renderizada.
   Ângulos do SceneScript são convertidos de graus para radianos usados pelo renderizador.
@@ -75,3 +88,10 @@ As pausas manuais são mantidas durante alterações de propriedades, redistribu
 de áudio e reinícios do motor na sessão atual. A opção **Parar** encerra os processos
 e limpa a pausa manual. No modo estendido há um único processo para todas as telas;
 por isso o menu mostra um único alvo, **Todos os monitores (estendido)**.
+
+Testar captura, resposta por frequência, ataques e consistência entre FPS:
+
+```sh
+c++ -std=c++20 -I "$engine_src/src" tests/engine_audio_dynamics.cpp -o /tmp/wpe-audio-dynamics-test
+/tmp/wpe-audio-dynamics-test
+```

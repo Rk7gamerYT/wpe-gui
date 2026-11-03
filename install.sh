@@ -74,18 +74,22 @@ build_engine() {
     run git -C "$ENGINE_DIR" submodule update --init --recursive
 
     local patch
-    for patch in "$HERE"/patches/*.patch; do
-        [ -f "$patch" ] || continue
-        if [ "$DRY" = 1 ]; then
-            printf '  + aplicar %s\n' "$(basename "$patch")"
-        elif git -C "$ENGINE_DIR" apply --check "$patch" 2> /dev/null; then
-            git -C "$ENGINE_DIR" apply "$patch" && echo "  patch aplicado: $(basename "$patch")"
-        elif git -C "$ENGINE_DIR" apply --check --reverse "$patch" 2> /dev/null; then
-            echo "  patch já aplicado: $(basename "$patch")"
-        else
-            die "o patch $(basename "$patch") não aplica em $ENGINE_REF; veja docs/INSTALL.md"
-        fi
-    done
+    if [ "$DRY" = 0 ] && python3 "$HERE/scripts/check-engine-patches.py" "$ENGINE_DIR" --installed >/dev/null 2>&1; then
+        echo "  série completa de patches já aplicada e verificada"
+    else
+        for patch in "$HERE"/patches/*.patch; do
+            [ -f "$patch" ] || continue
+            if [ "$DRY" = 1 ]; then
+                printf '  + aplicar %s\n' "$(basename "$patch")"
+            elif git -C "$ENGINE_DIR" apply --check "$patch" 2> /dev/null; then
+                git -C "$ENGINE_DIR" apply "$patch" && echo "  patch aplicado: $(basename "$patch")"
+            elif git -C "$ENGINE_DIR" apply --check --reverse "$patch" 2> /dev/null; then
+                echo "  patch já aplicado: $(basename "$patch")"
+            else
+                die "o patch $(basename "$patch") não aplica em $ENGINE_REF; veja docs/INSTALL.md"
+            fi
+        done
+    fi
 
     local jobs; jobs=$(build_jobs)
     echo "  compilando com $jobs job(s) (limitado pela memória livre: ~2 GB por job)"
