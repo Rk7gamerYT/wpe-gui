@@ -1,0 +1,126 @@
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+index 28d267d..9e4b5c7 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+@@ -43,6 +43,7 @@ void pa_stream_read_cb (pa_stream* stream, const size_t /*nbytes*/, void* userda
+         float sample = 0.0f;
+         if (data) memcpy (&sample, data + i * sizeof (float), sizeof (float));
+         recorder->samples.push (sample);
++        recorder->fastSamples.push (sample);
+     }
+ 
+     if (pa_stream_drop (stream) != 0) {
+@@ -64,6 +65,7 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
+         && pa_stream_get_state (recorder->captureStream) != PA_STREAM_FAILED) return;
+     recorder->monitorName = monitor_name;
+     recorder->samples.clear ();
++    recorder->fastSamples.clear ();
+ 
+     pa_sample_spec spec;
+     spec.format = PA_SAMPLE_FLOAT32NE;
+@@ -83,10 +85,10 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
+     // setup latency
+     pa_buffer_attr attr {};
+ 
+-    // Deliver 10 ms chunks and cap queued capture data at 100 ms.
++    // Deliver 5 ms chunks and cap queued capture data at 40 ms.
+     size_t bytesPerSec = pa_bytes_per_second (&spec);
+-    attr.fragsize = bytesPerSec * 10 / 1000;
+-    attr.maxlength = bytesPerSec * 100 / 1000;
++    attr.fragsize = bytesPerSec * 5 / 1000;
++    attr.maxlength = bytesPerSec * 40 / 1000;
+ 
+     if (pa_stream_connect_record (recorder->captureStream, monitor_name.c_str (), &attr, PA_STREAM_ADJUST_LATENCY)
+ 	!= 0) {
+@@ -137,7 +139,8 @@ void pa_context_notify_cb (pa_context* ctx, void* userdata) {
+ 
+ PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
+     m_captureData (
+-	{ .kisscfg = kiss_fftr_alloc (WAVE_BUFFER_SIZE, 0, nullptr, nullptr) }
++	{ .kisscfg = kiss_fftr_alloc (WAVE_BUFFER_SIZE, 0, nullptr, nullptr),
++          .fastcfg = kiss_fftr_alloc (FAST_BUFFER_SIZE, 0, nullptr, nullptr) }
+     ) {
+     this->m_mainloop = pa_mainloop_new ();
+     this->m_mainloopApi = pa_mainloop_get_api (this->m_mainloop);
+@@ -162,6 +165,7 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
+     }
+ 
+     free (this->m_captureData.kisscfg);
++    free (this->m_captureData.fastcfg);
+ 
+     pa_context_disconnect (this->m_context);
+     pa_context_unref (this->m_context);
+@@ -183,6 +187,11 @@ void PulseAudioPlaybackRecorder::update () {
+         kiss_fftr (m_captureData.kisscfg, m_audioFFTbuffer, m_FFTinfo);
+         float powers[64];
+         spectrumPowers (m_FFTinfo, WAVE_BUFFER_SIZE, 44100.0f, powers);
++        m_captureData.fastSamples.windowed (m_fastFFTbuffer);
++        kiss_fftr (m_captureData.fastcfg, m_fastFFTbuffer, m_fastFFTinfo);
++        float fastPowers[64];
++        spectrumPowers (m_fastFFTinfo, FAST_BUFFER_SIZE, 44100.0f, fastPowers);
++        mergeSpectrumWindows (powers, fastPowers);
+         m_dynamics.levels (powers, PlaybackRecorder::gain, audioDt, m_FFTdestination64);
+     } else if (std::chrono::duration<float> (now - m_lastAudio).count () > 0.15f) {
+         std::fill (std::begin (m_FFTdestination64), std::end (m_FFTdestination64), 0.0f);
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+index c595332..f3444f2 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+@@ -7,7 +7,8 @@
+ #include <chrono>
+ #include "AudioAnalysis.h"
+ 
+-#define WAVE_BUFFER_SIZE 4096
++#define WAVE_BUFFER_SIZE 2048
++#define FAST_BUFFER_SIZE 1024
+ 
+ namespace WallpaperEngine::Audio::Drivers::Recorders {
+ class PlaybackRecorder;
+@@ -19,7 +20,9 @@ public:
+      */
+     struct PulseAudioData {
+ 	kiss_fftr_cfg kisscfg;
++        kiss_fftr_cfg fastcfg;
+ 	AudioSampleWindow<WAVE_BUFFER_SIZE> samples;
++        AudioSampleWindow<FAST_BUFFER_SIZE> fastSamples;
+ 	pa_stream* captureStream;
+         std::string monitorName;
+     };
+@@ -38,6 +41,8 @@ private:
+     SpectrumDynamics m_dynamics;
+     std::chrono::steady_clock::time_point m_lastUpdate = std::chrono::steady_clock::now ();
+     std::chrono::steady_clock::time_point m_lastAudio = std::chrono::steady_clock::now ();
++    float m_fastFFTbuffer[FAST_BUFFER_SIZE] = {};
++    kiss_fft_cpx m_fastFFTinfo[FAST_BUFFER_SIZE / 2 + 1] = {};
+     float m_audioFFTbuffer[WAVE_BUFFER_SIZE] = { 0.0f };
+     kiss_fft_cpx m_FFTinfo[WAVE_BUFFER_SIZE / 2 + 1] = { { .r = 0.0f, .i = 0.0f } };
+     float m_FFTdestination64[64] = { 0 };
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h
+index ee92c3e..e618763 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h
+@@ -31,6 +31,15 @@ inline float spectrumLevel (float power, float gain) {
+     // -72 dBFS floor retains quieter harmonics without auto-amplifying silence.
+     return std::clamp ((10.0f * std::log10 (power) + 72.0f) / 72.0f * gain, 0.0f, 1.0f);
+ }
++// Longer bass window resolves low notes; the short window follows guitar and
++// percussion transients. Crossfade 120..300 Hz to avoid a boundary jump.
++inline void mergeSpectrumWindows (float (&bass)[64], const float (&fast)[64]) {
++    for (int band = 0; band < 64; ++band) {
++        const float hz = 20.0f * std::pow (1000.0f, (band + 0.5f) / 64.0f);
++        const float blend = std::clamp ((hz - 120.0f) / 180.0f, 0.0f, 1.0f);
++        bass[band] = bass[band] * (1.0f - blend) + fast[band] * blend;
++    }
++}
+ // Relative spectral shape plus positive spectral flux: equal-volume notes and
+ // percussion still move different bands. A bounded shared reference preserves
+ // the relation between bands and prevents background noise from filling the display.
+@@ -61,7 +70,7 @@ inline float smoothSpectrum (float current, float target, float dt) {
+     if (!std::isfinite (current)) current = 0.0f;
+     if (!std::isfinite (target)) target = 0.0f;
+     if (!std::isfinite (dt) || dt <= 0.0f) return current;
+-    const float seconds = target > current ? 0.018f : 0.140f;
++    const float seconds = target > current ? 0.006f : 0.100f;
+     const float alpha = -std::expm1 (-dt / seconds);
+     return std::clamp (current + (target - current) * alpha, 0.0f, 1.0f);
+ }

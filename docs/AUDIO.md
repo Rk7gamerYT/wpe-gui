@@ -95,3 +95,43 @@ Testar captura, resposta por frequência, ataques e consistência entre FPS:
 c++ -std=c++20 -I "$engine_src/src" tests/engine_audio_dynamics.cpp -o /tmp/wpe-audio-dynamics-test
 /tmp/wpe-audio-dynamics-test
 ```
+
+## Resposta rápida e referências (patch 0006)
+
+O patch `0006` substitui a janela única de 4096 amostras por duas janelas
+sobrepostas: 2048 amostras para graves e 1024 para médios/agudos. As potências são
+combinadas com uma transição entre 120 e 300 Hz antes da normalização. Há menos
+resolução nos subgraves do que na janela anterior; interpolação não substitui
+resolução real. Os limites de 20 Hz–20 kHz e os buffers 16/32/64 são preservados.
+
+A captura solicita fragmentos de 5 ms, limita a fila a 40 ms e usa ataque de
+6 ms e queda de 100 ms. São parâmetros internos, não uma garantia de latência
+fim a fim: o servidor de áudio, o FPS e os filtros do wallpaper também contam.
+
+O teste `tests/engine_audio_latency.cpp` mede o tempo até 25% da potência de um
+tom sintético, com passos de cerca de 5 ms. Nesta implementação, passou de
+49,9 para 24,9 ms em 86,1 Hz, e de 49,9 para 15,0 ms em 1378,1 Hz. Ele não mede
+sincronia audiovisual na tela nem reconhecimento de instrumentos em músicas.
+Compile com as mesmas opções de `tests/engine_spectrum.cpp`, trocando o nome do
+arquivo e do executável.
+
+Referências consultadas em 3 de novembro de 2026:
+
+- [Wallpaper Engine: processamento com SceneScript](https://docs.wallpaperengine.io/en/scene/scenescript/tutorial/audio.html)
+  documenta a seleção de bandas e a suavização no próprio script, usando o tempo
+  entre frames. Não publica nesse tutorial o algoritmo interno completo da FFT.
+- [Wallpaper Engine: AudioBuffers](https://docs.wallpaperengine.io/en/scene/scenescript/reference/class/AudioBuffers.html)
+  descreve buffers de canais esquerdo/direito e média, atualizados por frame.
+  O motor deste projeto ainda captura mono; não há separação estéreo real.
+- [CAVA: implementação de análise](https://github.com/karlstav/cava/blob/master/cavacore.c)
+  usa uma janela maior para graves, outra para médios/agudos, ganho por frequência,
+  sensibilidade automática e filtros de queda. A implementação aqui é própria;
+  não reproduz exatamente a distribuição ou os filtros do CAVA.
+- [projectM](https://github.com/projectM-visualizer/projectm)
+  combina FFT com detecção de batidas para alimentar a visualização.
+
+O resultado final também depende do autor do wallpaper. Um efeito que lê só as
+bandas graves não acompanha um solo apenas porque o motor captura médios/agudos.
+Alterar essa intenção deve ser um ajuste explícito do wallpaper/perfil, mantendo
+as frequências independentes. Análise espectral não isola automaticamente guitarra,
+voz, baixo ou bateria de uma mixagem.
