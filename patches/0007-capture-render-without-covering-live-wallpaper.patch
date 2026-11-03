@@ -1,0 +1,26 @@
+diff --git a/src/WallpaperEngine/Render/Drivers/Output/GLFWWindowOutput.cpp b/src/WallpaperEngine/Render/Drivers/Output/GLFWWindowOutput.cpp
+index bd84373..5f42e63 100644
+--- a/src/WallpaperEngine/Render/Drivers/Output/GLFWWindowOutput.cpp
++++ b/src/WallpaperEngine/Render/Drivers/Output/GLFWWindowOutput.cpp
+@@ -5,6 +5,8 @@
+ #include <GLFW/glfw3.h>
+ 
+ #include <unistd.h>
++#include <cstdlib>
++#include <cstring>
+ 
+ using namespace WallpaperEngine::Render::Drivers::Output;
+ 
+@@ -14,8 +16,10 @@ GLFWWindowOutput::GLFWWindowOutput (ApplicationContext& context, VideoDriver& dr
+ 	sLog.exception ("Initializing window output when not in output mode, how did you get here?!");
+     }
+ 
+-    // window should be visible
+-    driver.showWindow ();
++    // Background snapshots render in a hidden window, never over the live desktop.
++    const char* captureOnly = std::getenv ("WPE_CAPTURE_ONLY");
++    if (!context.settings.screenshot.take || !captureOnly || std::strcmp (captureOnly, "1") != 0)
++        driver.showWindow ();
+ 
+     if (this->m_context.settings.render.mode == Application::ApplicationContext::EXPLICIT_WINDOW) {
+ 	this->m_fullWidth = this->m_context.settings.render.window.geometry.z;

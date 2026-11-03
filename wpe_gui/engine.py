@@ -43,6 +43,7 @@ class Engine(QObject):
         self._failures = {}
         self._output = {}
         self._started_at = {}
+        self._pids = {}
         self._settings = settings
         self._properties = properties
         settings.changed.connect(self.savedChanged.emit)
@@ -68,6 +69,9 @@ class Engine(QObject):
         audio = self._audio_settings_snapshot()
         if audio == self._audio_settings:
             return
+        changed = [name for name, old, new in zip(
+            ("volume", "silent", "autoMute", "audioGain"), self._audio_settings, audio) if old != new]
+        self._log.info("action=audio_settings_changed keys=%s targets=%s", changed, sorted(self._procs))
         self._audio_settings = audio
         self._pending.update(self._procs)
         if self._pending:
@@ -206,6 +210,22 @@ class Engine(QObject):
         ]
         return args + self._properties.engine_args(path)
 
+    def build_capture_args(self, path: str, target: str) -> list[str]:
+        """Render a snapshot in a private hidden window, not on a desktop layer."""
+        original = self.build_args(path, target, audible=False)
+        args = []
+        index = 0
+        while index < len(original):
+            if original[index] in ("--screen-root", "--screen-span", "--window", "--layer"):
+                index += 2
+            else:
+                args.append(original[index])
+                index += 1
+        screens = self._screens_by_name()
+        selected = list(screens.values()) if target == SPAN else [screens.get(target) or QGuiApplication.primaryScreen()]
+        geometry = self._geometry(selected).split("x")
+        return args + ["--window", f"0x0x{geometry[-2]}x{geometry[-1]}", "--no-fullscreen-pause"]
+
     # -- power saving --------------------------------------------------------------------------
 
     def setPausedTargets(self, wanted: set):
@@ -223,6 +243,8 @@ class Engine(QObject):
             return
         for key in self._procs.keys() & (wanted | self._paused):
             self._signal(self._procs[key], signal.SIGSTOP if key in wanted else signal.SIGCONT)
+        self._log.info("action=pause_changed paused=%s manual=%s power=%s",
+                       sorted(wanted), sorted(self._manual_paused), sorted(self._power_paused))
         self._paused = wanted
         self._audio_sync.start()
         self.activeChanged.emit()
@@ -250,6 +272,9 @@ class Engine(QObject):
         self.activeChanged.emit()
 
     def _process_started(self, key, proc):
+        self._pids[proc] = proc.processId()
+        self._log.info("action=started target=%s pid=%s wallpaper=%s", key, proc.processId(),
+                       Path(self._assignments.get(key, "")).name)
         if self._procs.get(key) is proc and key in self._wanted_pauses():
             # QProcess.start() may return before a PID exists; apply the pause once it does.
             self._signal(proc, signal.SIGSTOP)
@@ -280,6 +305,8 @@ class Engine(QObject):
     def _rebalance_audio(self):
         audible = self._audible_targets()
         changes = [key for key in self._procs if self._audio_roles.get(key) != (key in audible)]
+        if changes:
+            self._log.info("action=audio_rebalance targets=%s audible=%s", sorted(changes), sorted(audible))
         # Stop duplicate playback before enabling the replacement source.
         for key in sorted(changes, key=lambda key: key in audible):
             path = self._assignments.get(key)
@@ -310,6 +337,7 @@ class Engine(QObject):
         if not self.binary():
             self.message.emit("linux-wallpaperengine não encontrado. Defina o caminho em Configurações.")
             return
+        self._log.info("action=apply target=%s wallpaper=%s", target or "all", Path(path).name)
         keys = self._targets_for(target)
         if keys == [SPAN]:
             self._stop_keys([k for k in self._assignments if k != SPAN])
@@ -356,6 +384,7 @@ class Engine(QObject):
             return False
         primary = QGuiApplication.primaryScreen().name()
         key = primary if primary in keys else keys[0]
+        self._log.info("action=login_capture_restart target=%s", key)
         planned = set(self._assignments)
         self._stop_keys([key])
         self._start(key, path, planned, ["--screenshot", destination, "--screenshot-delay", "5"])
@@ -373,6 +402,7 @@ class Engine(QObject):
             self._audio_roles.pop(key, None)
         procs = [(k, self._procs.pop(k)) for k in keys if k in self._procs]
         for k, proc in procs:
+            self._log.info("action=stop_requested target=%s pid=%s", k, proc.processId())
             proc.finished.disconnect()
             if k in self._paused:
                 self._signal(proc, signal.SIGCONT)  # a stopped process would sit on the pending SIGTERM
@@ -384,6 +414,7 @@ class Engine(QObject):
             proc.waitForFinished(1000)
             self._output.pop(proc, None)
             self._started_at.pop(proc, None)
+            self._pids.pop(proc, None)
             proc.deleteLater()
         if keys:
             self.activeChanged.emit()
@@ -448,11 +479,14 @@ class Engine(QObject):
         """Restart the running wallpaper so edited properties take effect (debounced while sliding)."""
         keys = [k for k, p in self._assignments.items() if p == path]
         if keys:
+            self._log.info("action=properties_changed wallpaper=%s targets=%s", Path(path).name, sorted(keys))
             self._pending.update(keys)
             self._reapply.start()
 
     def _reapply_pending(self):
         keys, self._pending = self._pending, set()
+        if keys:
+            self._log.info("action=reapply targets=%s", sorted(keys))
         for key in keys:
             path = self._assignments.get(key)
             if path:
@@ -472,6 +506,7 @@ class Engine(QObject):
         if self._restarts.get(key) is not timer:
             return
         del self._restarts[key]
+        self._log.info("action=crash_retry target=%s wallpaper=%s", key, Path(path).name)
         timer.deleteLater()
         if self._assignments.get(key) == path:
             self._start(key, path, planned=set(self._assignments))
@@ -479,6 +514,7 @@ class Engine(QObject):
     def _on_finished(self, key, proc, code):
         self._read_output(proc)
         out = self._output.pop(proc, b"").decode(errors="replace").strip()
+        pid = self._pids.pop(proc, None)
         uptime = time.monotonic() - self._started_at.pop(proc, time.monotonic())
         if self._procs.get(key) is not proc:
             proc.deleteLater()
@@ -490,8 +526,8 @@ class Engine(QObject):
         path = self._assignments[key]
         attempts = (0 if uptime >= 120 else self._failures.get(key, 0)) + 1
         self._failures[key] = attempts
-        self._log.error("target=%s exit=%s uptime=%.1fs attempt=%s error=%s\n%s",
-                        key, code, uptime, attempts, proc.errorString(), out)
+        self._log.error("action=unexpected_exit target=%s pid=%s exit=%s uptime=%.1fs attempt=%s error=%s\n%s",
+                        key, pid, code, uptime, attempts, proc.errorString(), out)
         if attempts <= 3:
             timer = QTimer(self, singleShot=True, interval=1000 * 2 ** (attempts - 1))
             timer.timeout.connect(lambda: self._retry(key, path, timer))

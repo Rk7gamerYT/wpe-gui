@@ -300,3 +300,17 @@ rm -rf ~/.local/share/wpe-gui ~/.config/wpe-gui      # motor compilado, imagens 
 ```
 
 Se o app trocou o fundo do sistema (função "Fundo estático"), use **Configurações → Restaurar o fundo de antes** *antes* de apagar a pasta de configurações.
+
+### Animação parece reiniciar sozinha
+
+A captura automática do fundo estático usa uma instância oculta do motor em
+janela privada (`WPE_CAPTURE_ONLY=1`, patch `0007`), sem abrir outra superfície
+sobre o wallpaper em execução. Os patches e a interface devem ser atualizados
+juntos. A captura continua gerando uma imagem da cena para o fundo estático.
+
+O registro `~/.local/state/wpe-gui/engine.log` distingue `started`,
+`stop_requested`, `unexpected_exit`, `crash_retry`, `audio_rebalance`,
+`audio_settings_changed`, `properties_changed`, `pause_changed` e
+`static_capture_start/stop`. Compare o alvo e o PID: uma captura auxiliar não
+significa que o processo principal foi reiniciado. Alterações de propriedades
+que exigem reconstruir a cena ainda reiniciam o motor intencionalmente.

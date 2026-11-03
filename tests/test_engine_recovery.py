@@ -24,6 +24,7 @@ class RecoveryTests(unittest.TestCase):
 
     def setUp(self):
         self.engine = ProcessEngine(Mock(), Mock())
+        self.engine._log = Mock()  # simulated crashes must not pollute the user session log
         self.engine.program = "/bin/sh"
         self.engine.script = "printf 'engine failure'; exit 139"
         self.addCleanup(self.engine.shutdown)

@@ -165,16 +165,20 @@ class StaticBackground(QObject):
         if not exe:
             self._fallback(key, path)
             return
-        args = self._engine.build_args(path, key, audible=False) + [
+        args = self._engine.build_capture_args(path, key) + [
             "--screenshot", str(destination), "--screenshot-delay", "5",
         ]
         proc = QProcess(self)
-        if self._engine.windowed():
-            env = QProcessEnvironment.systemEnvironment()
-            env.remove("WAYLAND_DISPLAY")
-            env.insert("XDG_SESSION_TYPE", "x11")
-            proc.setProcessEnvironment(env)
+        env = QProcessEnvironment.systemEnvironment()
+        env.remove("WAYLAND_DISPLAY")
+        env.insert("XDG_SESSION_TYPE", "x11")
+        env.insert("WPE_CAPTURE_ONLY", "1")
+        env.insert("WPE_AUDIO_PROCESSING", "1" if library.audio_responsive(path) else "0")
+        proc.setProcessEnvironment(env)
         proc.setProcessChannelMode(QProcess.MergedChannels)
+        self._engine._log.info("action=static_capture_start target=%s wallpaper=%s", key, Path(path).name)
+        proc.started.connect(lambda: self._engine._log.info(
+            "action=static_capture_started target=%s pid=%s", key, proc.processId()))
         proc.start(exe, args)
         self._proc = proc
         self._current = (key, path, destination)
@@ -198,6 +202,7 @@ class StaticBackground(QObject):
         self._deadline.stop()
         if self._proc is not None:
             proc, self._proc = self._proc, None
+            self._engine._log.info("action=static_capture_stop pid=%s", proc.processId())
             proc.terminate()
             if not proc.waitForFinished(1500):
                 proc.kill()
