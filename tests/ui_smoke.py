@@ -3,6 +3,7 @@
     QT_QPA_PLATFORM=offscreen .venv/bin/python tests/ui_smoke.py [wallpaper folder]
 """
 import sys
+import os
 import tempfile
 from pathlib import Path
 
@@ -10,12 +11,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from PySide6.QtCore import QTimer, QUrl, qInstallMessageHandler
 from PySide6.QtWidgets import QApplication
 from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuick import QQuickWindow
+from shiboken6 import getCppPointer, wrapInstance
 
 from wpe_gui.engine import Engine
 from wpe_gui.models import WallpaperFilter, WallpaperModel
 from wpe_gui.powersaver import PowerSaver
 from wpe_gui.properties import PropertiesStore
 from wpe_gui.settings import Settings
+from wpe_gui.updater import Updater
 from wpe_gui.staticbackground import StaticBackground
 
 try:  # present only in builds that have the login background feature
@@ -28,6 +32,7 @@ qInstallMessageHandler(lambda mode, ctx, text: messages.append(text))
 app = QApplication(sys.argv)
 tmp = Path(tempfile.mkdtemp())
 settings = Settings(tmp / "settings.json")
+updater = Updater()
 properties = PropertiesStore(tmp / "overrides.json")
 engine = Engine(settings, properties)
 powersaver = PowerSaver(settings, engine)
@@ -40,7 +45,7 @@ model.reload()
 
 qml = QQmlApplicationEngine()
 ctx = qml.rootContext()
-contexts = dict(settings=settings, backend=engine, properties=properties, library=model, wallpapers=proxy,
+contexts = dict(updater=updater, settings=settings, backend=engine, properties=properties, library=model, wallpapers=proxy,
                 staticBackground=static_background)
 if login_background:
     contexts["loginBackground"] = login_background
@@ -49,6 +54,8 @@ for name, obj in contexts.items():
 qml.load(QUrl.fromLocalFile(str(Path(__file__).resolve().parents[1] / "wpe_gui/qml/Main.qml")))
 root = qml.rootObjects()[0]
 folder = sys.argv[1] if len(sys.argv) > 1 else (str(model._items[0].path) if model._items else "")
+if os.environ.get("WPE_UI_AUDIO_MANUAL") == "1" and folder:
+    properties.setEngineOption(folder, "audioResponseMode", "manual")
 root.setProperty("selected", {"title": "t", "preview": "", "path": folder, "wtype": "scene", "description": "d", "tags": ""})
 
 
@@ -57,6 +64,10 @@ def finish():
     print("QML errors:", len(errors))
     for m in errors:
         print("  !", m[:200])
+    screenshot = os.environ.get("WPE_UI_SCREENSHOT")
+    if screenshot:
+        wrapInstance(getCppPointer(root)[0], QQuickWindow).grabWindow().save(screenshot)
+    updater.shutdown()
     engine.shutdown()
     app.exit(1 if errors else 0)
 

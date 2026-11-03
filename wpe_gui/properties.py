@@ -1,6 +1,7 @@
 """Per-wallpaper properties (the sliders/switches/colours from project.json) and their saved overrides."""
 
 import json
+import math
 import re
 from pathlib import Path
 
@@ -172,12 +173,24 @@ class PropertiesStore(QObject):
 
     ENGINE_KEY = "_engine"
     ENGINE_CHOICES = {"scaling": ("default", "stretch", "fit", "fill"), "clamping": ("clamp", "border", "repeat"),
-                      "sound": ("enabled", "muted")}
-    ENGINE_NUMERIC = {"audioGain": (0.0, 4.0), "volume": (0.0, 100.0)}
+                      "sound": ("enabled", "muted"), "audioResponseMode": ("auto", "manual")}
+    ENGINE_NUMERIC = {"audioGain": (0.0, 4.0), "volume": (0.0, 100.0), "audioResponseSpeed": (0.25, 4.0)}
 
     @Slot(str, result=bool)
     def audioResponsive(self, folder):
         return library.audio_responsive(folder)
+
+    @Slot(str, result="QVariant")
+    def audioTimingControls(self, folder):
+        """Only exposed numeric timing controls; do not guess units or change them."""
+        result = []
+        for item in self.load(folder):
+            text = item["key"] + " " + item["label"]
+            if (item["type"] == "slider"
+                    and re.search(r"audio|spectr|music|visualizer|batida", text, re.I)
+                    and re.search(r"smooth|response|speed|delay|attack|decay|suav|veloc|sincron", text, re.I)):
+                result.append({"key": item["key"], "label": item["label"]})
+        return result
 
     def engine_options(self, folder: str) -> dict:
         return dict(self._data.get(folder, {}).get(self.ENGINE_KEY, {}))
@@ -192,10 +205,14 @@ class PropertiesStore(QObject):
         if key in self.ENGINE_NUMERIC:
             low, high = self.ENGINE_NUMERIC[key]
             try:
+                if value and not math.isfinite(float(value)):
+                    return
                 value = f"{min(high, max(low, float(value))):g}" if value else ""
             except ValueError:
                 return
         elif key not in self.ENGINE_CHOICES or (value and value not in self.ENGINE_CHOICES[key]):
+            return
+        if self.engineOption(folder, key) == value:
             return
         entry = self._data.setdefault(folder, {})
         options = entry.setdefault(self.ENGINE_KEY, {})

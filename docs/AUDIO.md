@@ -135,3 +135,30 @@ bandas graves não acompanha um solo apenas porque o motor captura médios/agudo
 Alterar essa intenção deve ser um ajuste explícito do wallpaper/perfil, mantendo
 as frequências independentes. Análise espectral não isola automaticamente guitarra,
 voz, baixo ou bateria de uma mixagem.
+
+## Sincronização por wallpaper (patch 0008)
+
+O painel procura propriedades numéricas expostas pelo wallpaper com nomes/rótulos
+relacionados a áudio e tempo de resposta (por exemplo, `Audio Smooth Delay`).
+Quando encontra um controle, mantém a propriedade nativa disponível na lista
+normal e não exibe um substituto. Essa detecção é conservadora, baseada nos
+metadados expostos em `project.json`; filtros internos de shaders/scripts que o
+autor não expõe não são reinterpretados nem alterados automaticamente.
+
+Sem controle nativo reconhecido, wallpapers reativos oferecem:
+
+- **Automático**: acelera a subida em ataques abruptos, solta quedas fortes e
+  suaviza notas sustentadas. Não detecta BPM nem antecipa som ainda não capturado.
+- **Manual**: velocidade entre 25% e 400%; 100% usa ataque de 6 ms e queda de
+  100 ms. O multiplicador divide ambos os tempos, sem mudar a faixa de frequências.
+
+O ajuste é independente por wallpaper. A interface grava um pequeno valor de
+controle atomicamente em `~/.local/state/wpe-gui/audio-controls/` (respeitando
+`XDG_STATE_HOME`), e passa seu caminho com `WPE_AUDIO_RESPONSE_FILE`. O motor
+consulta o arquivo a cada 100 ms. Valores inválidos mantêm o último ajuste válido.
+Alterar somente o modo/velocidade atualiza a resposta sem recriar os processos
+nem disparar uma nova captura do fundo estático. O modo automático usa o valor
+0 no arquivo; o manual usa multiplicadores de 0,25 a 4.
+
+Isso regula a resposta do espectro. Atrasos adicionais inseridos pelo próprio
+wallpaper, pelo servidor de áudio ou pelo FPS não são removidos automaticamente.

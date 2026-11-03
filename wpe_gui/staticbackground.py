@@ -118,7 +118,8 @@ class StaticBackground(QObject):
         """Changes whenever what is running (or how it is configured) changes."""
         props = self._engine._properties
         parts = [
-            (key, path, tuple(props.engine_args(path)), tuple(sorted(props.engine_options(path).items())))
+            (key, path, tuple(props.engine_args(path)), tuple(sorted((k, v) for k, v in props.engine_options(path).items()
+                         if k not in ("audioResponseMode", "audioResponseSpeed"))))
             for key, path in sorted(self._engine._assignments.items())
         ]
         parts.append((os.environ.get("XDG_CURRENT_DESKTOP", ""), self._settings.get("scaling"), self._settings.get("clamping"), self._settings.get("layout")))

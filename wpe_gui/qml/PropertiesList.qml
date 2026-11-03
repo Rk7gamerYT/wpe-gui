@@ -8,6 +8,7 @@ ColumnLayout {
     id: root
     property string folder: ""
     property var items: []
+    property var nativeAudioTiming: []
     readonly property bool audioResponsive: folder !== "" && properties.audioResponsive(folder)
     spacing: 10
     property int optionRevision: 0
@@ -24,7 +25,10 @@ ColumnLayout {
         function onChanged() { root.optionRevision++; }
     }
 
-    function reload() { items = folder ? properties.load(folder) : [] }
+    function reload() {
+        items = folder ? properties.load(folder) : []
+        nativeAudioTiming = folder ? properties.audioTimingControls(folder) : []
+    }
     // Bool/combo values can show or hide other properties (conditions), so they rebuild the list
     function commit(key, type, value) {
         properties.setValue(folder, key, value)
@@ -89,6 +93,36 @@ ColumnLayout {
                 onMoved: if (!pressed) properties.setEngineOption(root.folder, "audioGain", String(value / 100))
             }
             Label { text: Math.round(gainSlider.value) + "%"; Layout.preferredWidth: 38; horizontalAlignment: Text.AlignRight }
+        }
+        Label { text: "Sincronização do áudio"; visible: root.audioResponsive && !root.nativeAudioTiming.length }
+        ComboBox {
+            visible: root.audioResponsive && !root.nativeAudioTiming.length
+            Layout.fillWidth: true
+            model: ["Automático", "Manual"]
+            currentIndex: root.engineOption("audioResponseMode") === "manual" ? 1 : 0
+            onActivated: properties.setEngineOption(root.folder, "audioResponseMode", currentIndex ? "manual" : "auto")
+        }
+        Label { text: "Velocidade de resposta"; visible: root.audioResponsive && !root.nativeAudioTiming.length && root.engineOption("audioResponseMode") === "manual" }
+        RowLayout {
+            visible: root.audioResponsive && !root.nativeAudioTiming.length && root.engineOption("audioResponseMode") === "manual"
+            Layout.fillWidth: true
+            Slider {
+                id: responseSpeed
+                Layout.fillWidth: true
+                from: 25; to: 400; stepSize: 5
+                value: 100 * Number(root.engineOption("audioResponseSpeed") || "1")
+                onPressedChanged: if (!pressed) properties.setEngineOption(root.folder, "audioResponseSpeed", String(value / 100))
+                onMoved: if (!pressed) properties.setEngineOption(root.folder, "audioResponseSpeed", String(value / 100))
+            }
+            Label { text: Math.round(responseSpeed.value) + "%" }
+        }
+        Label {
+            visible: root.audioResponsive
+            Layout.columnSpan: 2; Layout.fillWidth: true
+            wrapMode: Text.Wrap; opacity: 0.7; font.pixelSize: 11
+            text: root.nativeAudioTiming.length
+                ? "Este wallpaper tem ajuste próprio de resposta do áudio nas propriedades abaixo."
+                : "Automático adapta a resposta às mudanças do som. No manual, valores maiores reagem mais rápido. Aplica sem reiniciar o wallpaper."
         }
         Label { text: "Bordas" }
         ComboBox {

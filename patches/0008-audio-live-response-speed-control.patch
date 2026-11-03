@@ -1,0 +1,91 @@
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h
+index e618763..c1d6f9d 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioAnalysis.h
+@@ -66,11 +66,17 @@ struct SpectrumDynamics {
+         }
+     }
+ };
+-inline float smoothSpectrum (float current, float target, float dt) {
++inline float smoothSpectrum (float current, float target, float dt, float speed = 1.0f) {
+     if (!std::isfinite (current)) current = 0.0f;
+     if (!std::isfinite (target)) target = 0.0f;
+     if (!std::isfinite (dt) || dt <= 0.0f) return current;
+-    const float seconds = target > current ? 0.006f : 0.100f;
++    if (speed == 0.0f) {
++        // Catch abrupt attacks quickly, ease sustained notes, and release sharp drops.
++        speed = target > current + 0.15f ? 2.0f : (target < current * 0.5f ? 1.6f : 0.8f);
++    }
++    if (!std::isfinite (speed)) speed = 1.0f;
++    speed = std::clamp (speed, 0.25f, 4.0f);
++    const float seconds = (target > current ? 0.006f : 0.100f) / speed;
+     const float alpha = -std::expm1 (-dt / seconds);
+     return std::clamp (current + (target - current) * alpha, 0.0f, 1.0f);
+ }
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+index f3444f2..3bab401 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
+@@ -39,6 +39,8 @@ private:
+     PulseAudioData m_captureData;
+ 
+     SpectrumDynamics m_dynamics;
++    float m_responseSpeed = 0.0f;
++    std::chrono::steady_clock::time_point m_nextResponseCheck {};
+     std::chrono::steady_clock::time_point m_lastUpdate = std::chrono::steady_clock::now ();
+     std::chrono::steady_clock::time_point m_lastAudio = std::chrono::steady_clock::now ();
+     float m_fastFFTbuffer[FAST_BUFFER_SIZE] = {};
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+index 9e4b5c7..9166d6f 100644
+--- a/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.cpp
+@@ -1,5 +1,7 @@
+ #include "PulseAudioPlaybackRecorder.h"
+ #include "Spectrum.h"
++#include "AudioResponseControl.h"
++#include <cstdlib>
+ #include <iterator>
+ #include "WallpaperEngine/Logging/Log.h"
+ #include <cmath>
+@@ -176,6 +178,10 @@ void PulseAudioPlaybackRecorder::update () {
+     for (int i = 0; i < 8 && pa_mainloop_iterate (this->m_mainloop, 0, nullptr) > 0; ++i) { }
+ 
+     const auto now = std::chrono::steady_clock::now ();
++    if (now >= m_nextResponseCheck) {
++        m_responseSpeed = loadResponseSpeed (std::getenv ("WPE_AUDIO_RESPONSE_FILE"), m_responseSpeed);
++        m_nextResponseCheck = now + std::chrono::milliseconds (100);
++    }
+     const float dt = std::chrono::duration<float> (now - m_lastUpdate).count ();
+     m_lastUpdate = now;
+     auto& samples = m_captureData.samples;
+@@ -201,7 +207,7 @@ void PulseAudioPlaybackRecorder::update () {
+     std::fill (std::begin (audio32), std::end (audio32), 0.0f);
+     std::fill (std::begin (audio16), std::end (audio16), 0.0f);
+     for (int band = 0; band < 64; ++band) {
+-        audio64[band] = smoothSpectrum (audio64[band], m_FFTdestination64[band], dt);
++        audio64[band] = smoothSpectrum (audio64[band], m_FFTdestination64[band], dt, m_responseSpeed);
+         audio32[band >> 1] = std::max (audio32[band >> 1], audio64[band]);
+         audio16[band >> 2] = std::max (audio16[band >> 2], audio64[band]);
+     }
+diff --git a/src/WallpaperEngine/Audio/Drivers/Recorders/AudioResponseControl.h b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioResponseControl.h
+new file mode 100644
+index 0000000..4410d83
+--- /dev/null
++++ b/src/WallpaperEngine/Audio/Drivers/Recorders/AudioResponseControl.h
+@@ -0,0 +1,16 @@
++#pragma once
++#include <cmath>
++#include <fstream>
++namespace WallpaperEngine::Audio::Drivers::Recorders {
++// Read an atomically replaced scalar JSON value. Missing or partial files retain
++// the current setting. 0 means adaptive; .25..4 are manual speed multipliers.
++inline float loadResponseSpeed (const char* path, float current) {
++    if (!path || !*path) return current;
++    std::ifstream input (path);
++    float value;
++    if (!(input >> value) || !std::isfinite (value)) return current;
++    input >> std::ws;
++    if (!input.eof () || (value != 0.0f && (value < 0.25f || value > 4.0f))) return current;
++    return value;
++}
++}

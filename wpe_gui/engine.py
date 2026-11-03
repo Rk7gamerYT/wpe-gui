@@ -4,6 +4,8 @@ The engine accepts a single --window per process, so in window mode every monito
 """
 
 import logging
+import hashlib
+import math
 from logging.handlers import RotatingFileHandler
 import os
 import time
@@ -16,6 +18,7 @@ from PySide6.QtGui import QGuiApplication
 from . import library
 from .kde import native_wayland, screen_alias
 from .engine_locator import locate_engine
+from .json_store import write_json
 
 SPAN = "*"  # target key of the single process covering every monitor
 LAYOUTS = ("independent", "duplicate", "span")
@@ -44,6 +47,7 @@ class Engine(QObject):
         self._output = {}
         self._started_at = {}
         self._pids = {}
+        self._render_signatures = {}
         self._settings = settings
         self._properties = properties
         settings.changed.connect(self.savedChanged.emit)
@@ -61,6 +65,30 @@ class Engine(QObject):
         self._audio_sync.timeout.connect(self._rebalance_audio)
         self._audio_settings = self._audio_settings_snapshot()
         settings.changed.connect(self._on_settings_changed)
+
+    def _render_signature(self, path):
+        options = self._properties.engine_options(path)
+        options = options if isinstance(options, dict) else {}
+        args = self._properties.engine_args(path)
+        args = args if isinstance(args, (tuple, list)) else []
+        return (tuple(args), tuple(sorted((key, value) for key, value in options.items()
+                if key not in ("audioResponseMode", "audioResponseSpeed"))))
+
+    def _sync_audio_response(self, path):
+        options = self._properties.engine_options(path)
+        options = options if isinstance(options, dict) else {}
+        try:
+            speed = float(options.get("audioResponseSpeed") or 1.0)
+            if not math.isfinite(speed): speed = 1.0
+            speed = min(4.0, max(0.25, speed)) if options.get("audioResponseMode") == "manual" else 0.0
+            token = hashlib.sha256(str(Path(path).resolve()).encode()).hexdigest()[:24]
+            state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+            target = state / "wpe-gui/audio-controls" / (token + ".json")
+            write_json(target, speed)
+            return str(target)
+        except (OSError, TypeError, ValueError) as error:
+            self._log.warning("action=audio_response_update_failed error=%s", error)
+            return ""
 
     def _audio_settings_snapshot(self):
         return tuple(self._settings.get(key) for key in ("volume", "silent", "autoMute", "audioGain"))
@@ -355,6 +383,10 @@ class Engine(QObject):
         env = QProcessEnvironment.systemEnvironment()
         # Some scenes use audio shaders/scripts without declaring support in project.json.
         env.insert("WPE_AUDIO_PROCESSING", "1" if library.audio_responsive(path) else "0")
+        control = self._sync_audio_response(path)
+        if control:
+            env.insert("WPE_AUDIO_RESPONSE_FILE", control)
+        self._render_signatures[path] = self._render_signature(path)
         if self.windowed():
             # GLEW can't initialise on native Wayland; run the window through XWayland
             env.remove("WAYLAND_DISPLAY")
@@ -478,6 +510,10 @@ class Engine(QObject):
     def propertiesChanged(self, path: str):
         """Restart the running wallpaper so edited properties take effect (debounced while sliding)."""
         keys = [k for k, p in self._assignments.items() if p == path]
+        if keys and self._render_signatures.get(path) == self._render_signature(path):
+            self._sync_audio_response(path)
+            self._log.info("action=audio_response_live wallpaper=%s targets=%s", Path(path).name, sorted(keys))
+            return
         if keys:
             self._log.info("action=properties_changed wallpaper=%s targets=%s", Path(path).name, sorted(keys))
             self._pending.update(keys)
