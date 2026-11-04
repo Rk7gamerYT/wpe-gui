@@ -13,7 +13,7 @@ from .json_store import write_json
 OVERRIDES_PATH = Path.home() / ".config/wpe-gui/overrides.json"
 
 # Property types we can render and send to the engine with --set-property
-EDITABLE = {"bool", "slider", "color", "combo", "textinput"}
+EDITABLE = {"bool", "slider", "color", "combo", "textinput", "file", "scenetexture", "directory"}
 LABEL_TYPES = {"text", "group"}
 
 _TAG = re.compile(r"<[^>]+>")
@@ -68,6 +68,8 @@ def condition_holds(expr: str, values: dict) -> bool:
 
 
 def _coerce(ptype: str, value):
+    if ptype in ("file", "directory", "scenetexture"):
+        return "" if value is None else str(value)
     if ptype == "bool":
         return value in (True, "true", "1", 1)
     if ptype == "slider":
@@ -108,7 +110,7 @@ class PropertiesStore(QObject):
         return wp.properties if wp else {}
 
     def _values(self, folder: str, defs: dict) -> dict:
-        saved = self._data.get(folder, {})
+        saved = self._data.get(folder, {}) if self.parameterMode(folder) == "manual" else {}
         return {
             k: _coerce(d.get("type"), saved.get(k, d.get("value")))
             for k, d in defs.items()
@@ -173,7 +175,7 @@ class PropertiesStore(QObject):
 
     ENGINE_KEY = "_engine"
     ENGINE_CHOICES = {"scaling": ("default", "stretch", "fit", "fill"), "clamping": ("clamp", "border", "repeat"),
-                      "sound": ("enabled", "muted"), "audioResponseMode": ("auto", "manual"), "audioCurveMode": ("auto", "manual"), "audioGainMode": ("auto", "manual")}
+                      "sound": ("enabled", "muted"), "audioResponseMode": ("auto", "manual"), "audioCurveMode": ("auto", "manual"), "audioGainMode": ("auto", "manual"), "wallpaperParametersMode": ("auto", "manual")}
     ENGINE_NUMERIC = {"audioGain": (0.0, 4.0), "volume": (0.0, 100.0), "audioResponseSpeed": (0.25, 4.0), "audioCurve": (0.25, 4.0)}
 
     @Slot(str, result=bool)
@@ -249,9 +251,19 @@ class PropertiesStore(QObject):
         self._save()
         self.changed.emit(folder)
 
+    @Slot(str, result=str)
+    def parameterMode(self, folder):
+        mode = self.engine_options(folder).get("wallpaperParametersMode")
+        if mode in ("auto", "manual"):
+            return mode
+        definitions = self._definitions(folder)
+        return "manual" if any(key in definitions for key in self._data.get(folder, {})) else "auto"
+
     def engine_args(self, folder: str) -> list[str]:
         """--set-property arguments for the overridden values only."""
         defs = self._definitions(folder)
+        if self.parameterMode(folder) == "auto":
+            return []
         args = []
         for key, value in self._data.get(folder, {}).items():
             d = defs.get(key)

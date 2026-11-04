@@ -73,9 +73,34 @@ def default_assets_dir() -> Path | None:
     return None
 
 
+def read_project(folder: Path, seen=None) -> dict:
+    seen = set() if seen is None else seen
+    canonical = folder.resolve()
+    if canonical in seen or len(seen) >= 20:
+        raise ValueError("Cyclic wallpaper dependency")
+    seen.add(canonical)
+    data = json.loads((folder / "project.json").read_text(encoding="utf-8-sig"))
+    dependency = data.get("dependency")
+    if dependency is None:
+        return data
+    dependency = str(dependency)
+    if not dependency.isascii() or not dependency.isdecimal():
+        raise ValueError("Invalid wallpaper dependency")
+    result = read_project(folder.parent / dependency, seen)
+    properties = result.setdefault("general", {}).setdefault("properties", {})
+    for key, value in data.get("preset", {}).items():
+        if value is not None and key in properties and isinstance(properties[key], dict):
+            properties[key]["value"] = value
+    for key in ("title", "preview", "description", "tags", "workshopid"):
+        if key in data:
+            result[key] = data[key]
+    result["workshopid"] = folder.name
+    return result
+
+
 def read_wallpaper(folder: Path) -> Wallpaper | None:
     try:
-        data = json.loads((folder / "project.json").read_text(encoding="utf-8-sig"))
+        data = read_project(folder)
     except (OSError, ValueError):
         return None
     preview = folder / data["preview"] if data.get("preview") else None
@@ -113,11 +138,24 @@ def audio_responsive(folder: str) -> bool:
     """
     root = Path(folder)
     try:
-        data = json.loads((root / "project.json").read_text(encoding="utf-8-sig"))
+        data = read_project(root)
     except (OSError, ValueError):
         return False
     if data.get("general", {}).get("supportsaudioprocessing"):
         return True
+    if data.get("type") == "web":
+        roots = [root]
+        dependency = json.loads((root / "project.json").read_text(encoding="utf-8-sig")).get("dependency")
+        if dependency is not None and str(dependency).isascii() and str(dependency).isdecimal():
+            roots.append(root.parent / str(dependency))
+        for directory in roots:
+            for file in directory.rglob("*"):
+                if file.suffix.lower() in (".js", ".html", ".htm") and file.is_file():
+                    try:
+                        if file.stat().st_size <= 16 * 1024 * 1024 and b"wallpaperRegisterAudioListener" in file.read_bytes():
+                            return True
+                    except OSError:
+                        pass
     needles = (b"g_AudioSpectrum", b"registerAudioBuffers", b"audioprocessingmode")
     overlap = max(map(len, needles)) - 1
     try:

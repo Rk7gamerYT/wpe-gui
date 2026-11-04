@@ -44,14 +44,20 @@ def main():
     parser.add_argument('--assets', type=Path, required=True)
     parser.add_argument('--library', type=Path, action='append')
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--scope', choices=('all', 'script-audio'), default='all')
+    parser.add_argument('--timeout', type=float, default=12)
+    parser.add_argument('--ids', help='Comma-separated wallpaper IDs for a focused recheck')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    env.update(XDG_SESSION_TYPE='x11', WPE_AUDIO_PROCESSING='1')
+    env.update(XDG_SESSION_TYPE='x11', WPE_AUDIO_PROCESSING='1', WPE_CAPTURE_ONLY='1')
     env.pop('WAYLAND_DISPLAY', None)
     rows = []
+    selected = set(args.ids.split(",")) if args.ids else None
     for wallpaper in scan(args.library or default_workshop_dirs()):
-        if not uses_script_audio(wallpaper.path):
+        if selected and wallpaper.id not in selected:
+            continue
+        if args.scope == 'script-audio' and not uses_script_audio(wallpaper.path):
             continue
         logpath = args.output / f'{wallpaper.id}.log'
         screenshot = (args.output / f'{wallpaper.id}.png').resolve()
@@ -63,7 +69,7 @@ def main():
         with logpath.open('wb') as log:
             process = subprocess.Popen(command, env=env, stdout=log, stderr=log,
                                        preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
-            deadline = time.monotonic() + 12
+            deadline = time.monotonic() + args.timeout
             rendered_at = None
             while process.poll() is None and time.monotonic() < deadline:
                 if screenshot.exists():
@@ -80,10 +86,10 @@ def main():
                     process.wait()
         lines = logpath.read_text(errors='replace').splitlines()
         errors = list(dict.fromkeys(line[:500] for line in lines if any(word in line.lower() for word in
-                           ('scriptengine [', 'scenescript timer:', 'not supported', 'not implemented',
+                           ('webscript [', 'webload [', 'scriptengine [', 'scenescript timer:', 'not supported', 'not implemented',
                             'failed to setup', 'typeerror', 'referenceerror', 'syntaxerror',
-                            '[json.exception', 'framebuffers are not properly set'))))
-        row = {'id': wallpaper.id, 'title': wallpaper.title, 'rendered': screenshot.exists(),
+                            '[json.exception', 'framebuffers are not properly set', 'exception', 'unsupported', 'cannot load', 'error:'))))
+        row = {'id': wallpaper.id, 'title': wallpaper.title, 'type': wallpaper.type, 'rendered': screenshot.exists(),
                'exit': process.returncode, 'errors': errors[:15]}
         rows.append(row)
         (args.output / 'results.json').write_text(json.dumps(rows, ensure_ascii=False, indent=2))

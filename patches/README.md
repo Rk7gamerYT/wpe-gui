@@ -16,3 +16,9 @@ Para verificar a série sem alterar um checkout do motor:
 ```sh
 python3 scripts/check-engine-patches.py /caminho/do/linux-wallpaperengine
 ```
+
+A série 0011–0014 acrescenta presets com dependências, ponte de propriedades e áudio
+para wallpapers web, correções de SceneScript/vetores/texto, animações de textura,
+compatibilidade de metadados de shaders, modulação de partículas por bandas e
+imagens escolhidas pelo usuário. A [auditoria de compatibilidade](../docs/SCENESCRIPT.md)
+distingue funções verificadas das áreas ainda incompletas.

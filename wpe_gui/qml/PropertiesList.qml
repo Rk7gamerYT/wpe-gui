@@ -40,6 +40,11 @@ ColumnLayout {
     }
     onFolderChanged: reload()
 
+    function manualParameters() {
+        const revision = optionRevision;
+        return properties.parameterMode(folder) === "manual";
+    }
+
     // Per-wallpaper display adjustments; "Padrão" falls back to the global setting
     Label { text: "Ajustes do wallpaper"; font.bold: true; visible: root.folder !== "" }
     GridLayout {
@@ -199,15 +204,35 @@ ColumnLayout {
         }
     }
 
+    RowLayout {
+        visible: root.items.length > 0
+        Layout.fillWidth: true
+        Label { text: "Parâmetros do autor" }
+        ComboBox {
+            Layout.fillWidth: true
+            model: ["Automático", "Manual"]
+            currentIndex: root.manualParameters() ? 1 : 0
+            onActivated: properties.setEngineOption(root.folder, "wallpaperParametersMode", currentIndex ? "manual" : "auto")
+        }
+    }
+    Label {
+        visible: root.items.length > 0
+        Layout.fillWidth: true; wrapMode: Text.Wrap; opacity: 0.7; font.pixelSize: 11
+        text: root.manualParameters() ? "Altere os parâmetros expostos pelo wallpaper. Automático recupera os padrões sem apagar seus ajustes."
+                                      : "Usa os parâmetros originais do wallpaper ou preset. Selecione Manual para personalizar."
+    }
     Repeater {
         model: root.items
         delegate: Loader {
             id: row
             required property var modelData
             Layout.fillWidth: true
+            enabled: root.manualParameters()
+            opacity: enabled ? 1 : 0.55
             sourceComponent: ({
                 bool: boolControl, slider: sliderControl, color: colorControl,
-                combo: comboControl, textinput: textControl, text: labelControl, group: groupControl
+                combo: comboControl, textinput: textControl, file: fileControl, directory: fileControl,
+                scenetexture: textControl, text: labelControl, group: groupControl
             })[modelData.type]
         }
     }
@@ -289,6 +314,35 @@ ColumnLayout {
                 Layout.fillWidth: true
                 text: modelData.value
                 onEditingFinished: root.commit(modelData.key, "textinput", text)
+            }
+        }
+    }
+
+    Component {
+        id: fileControl
+        ColumnLayout {
+            width: parent.width
+            Label { text: modelData.label; Layout.fillWidth: true; wrapMode: Text.Wrap }
+            RowLayout {
+                TextField {
+                    Layout.fillWidth: true
+                    text: modelData.value || ""
+                    onEditingFinished: root.commit(modelData.key, modelData.type, text)
+                }
+                Button {
+                    text: "Escolher…"
+                    onClicked: modelData.type === "directory" ? folderChooser.open() : fileChooser.open()
+                }
+            }
+            FileDialog {
+                id: fileChooser
+                title: modelData.label
+                onAccepted: root.commit(modelData.key, modelData.type, decodeURIComponent(selectedFile.toString().replace(/^file:\/\//, "")))
+            }
+            FolderDialog {
+                id: folderChooser
+                title: modelData.label
+                onAccepted: root.commit(modelData.key, modelData.type, decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, "")))
             }
         }
     }

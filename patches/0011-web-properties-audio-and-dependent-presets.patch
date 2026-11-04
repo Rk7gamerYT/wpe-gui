@@ -1,0 +1,380 @@
+diff --git a/src/WallpaperEngine/Application/ApplicationContext.cpp b/src/WallpaperEngine/Application/ApplicationContext.cpp
+--- a/src/WallpaperEngine/Application/ApplicationContext.cpp
++++ b/src/WallpaperEngine/Application/ApplicationContext.cpp
+@@ -676,7 +676,7 @@
+ 
+ 	this->settings.audio.volume = std::max (0, std::min (this->settings.audio.volume, 128));
+ 	this->settings.screenshot.delay
+-	    = std::max<uint32_t> (0, std::min<uint32_t> (this->settings.screenshot.delay, 5));
++	    = std::max<uint32_t> (0, std::min<uint32_t> (this->settings.screenshot.delay, 3600));
+ 
+ 	// use std::cout on this in case logging is disabled, this way it's easy to look at what is running
+ 	std::stringbuf buffer;
+diff --git a/src/WallpaperEngine/Application/WallpaperApplication.cpp b/src/WallpaperEngine/Application/WallpaperApplication.cpp
+--- a/src/WallpaperEngine/Application/WallpaperApplication.cpp
++++ b/src/WallpaperEngine/Application/WallpaperApplication.cpp
+@@ -1,4 +1,6 @@
+ #include "WallpaperApplication.h"
++#include <set>
++#include <fstream>
+ 
+ #include "Steam/FileSystem/FileSystem.h"
+ #include "WallpaperEngine/Application/ApplicationState.h"
+@@ -75,10 +77,40 @@
+     m_mediaSource = std::make_unique<WallpaperEngine::Media::DBusMediaSource> (std::chrono::milliseconds (2000));
+ }
+ 
++static JSON resolveProjectPreset (const std::filesystem::path& folder, std::set<std::filesystem::path>& seen,
++                                  std::vector<std::filesystem::path>& dependencies) {
++    const auto canonical = std::filesystem::weakly_canonical (folder);
++    if (seen.size () >= 20 || !seen.insert (canonical).second) throw std::runtime_error ("Cyclic wallpaper preset dependency");
++    std::ifstream input (folder / "project.json");
++    if (!input) throw std::runtime_error ("Wallpaper dependency project not found: " + folder.string ());
++    JSON project; input >> project;
++    if (!project.contains ("dependency")) return project;
++    const auto& dependency = project["dependency"];
++    const std::string id = dependency.is_string () ? dependency.get<std::string> () : std::to_string (dependency.get<long long> ());
++    if (id.empty () || id.find_first_not_of ("0123456789") != std::string::npos)
++        throw std::runtime_error ("Invalid wallpaper dependency id");
++    const auto parent = folder.parent_path () / id;
++    dependencies.push_back (parent);
++    JSON result = resolveProjectPreset (parent, seen, dependencies);
++    if (project.contains ("preset") && project["preset"].is_object ()) {
++        for (auto& [key, value] : project["preset"].items ()) {
++            if (!value.is_null () && result["general"]["properties"].contains (key))
++                result["general"]["properties"][key]["value"] = value;
++        }
++    }
++    for (const char* key : { "title", "preview", "description", "tags", "workshopid" })
++        if (project.contains (key)) result[key] = project[key];
++    result["workshopid"] = folder.filename ().string ();
++    return result;
++}
++
+ AssetLocatorUniquePtr WallpaperApplication::setupAssetLocator (const std::string& bg) const {
+     auto container = std::make_unique<Container> ();
+ 
+     const std::filesystem::path path = bg;
++    std::set<std::filesystem::path> seenProjects;
++    std::vector<std::filesystem::path> dependencyPaths;
++    const JSON effectiveProject = resolveProjectPreset (path, seenProjects, dependencyPaths);
+ 
+     container->registerAdapterFactory (std::make_unique<MediaCoverFactory> (*this->m_mediaSource));
+     container->mount ("$mediaThumbnail", "$mediaThumbnail");
+@@ -91,6 +123,14 @@
+     try {
+ 	container->mount (path / "gifscene.pkg", "/");
+     } catch (std::runtime_error&) { }
++
++    for (const auto& dependency : dependencyPaths) {
++        container->mount (dependency, "/");
++        for (const char* package : { "scene.pkg", "gifscene.pkg" }) {
++            if (std::filesystem::exists (dependency / package)) container->mount (dependency / package, "/");
++        }
++    }
++    container->getVFS ().add ("project.json", effectiveProject);
+ 
+     try {
+ 	container->mount (this->m_context.settings.general.assets, "/");
+@@ -948,6 +988,8 @@
+ 	return;
+     }
+ 
++    for (const auto& [screen, wallpaper] : m_renderContext->getWallpapers ())
++        if (!wallpaper->isReadyForCapture ()) return;
+     this->takeScreenshot (this->m_context.settings.screenshot.path);
+     this->m_screenShotTaken = true;
+ }
+diff --git a/src/WallpaperEngine/Render/CWallpaper.h b/src/WallpaperEngine/Render/CWallpaper.h
+--- a/src/WallpaperEngine/Render/CWallpaper.h
++++ b/src/WallpaperEngine/Render/CWallpaper.h
+@@ -58,6 +58,7 @@
+      * Pause the renderer
+      */
+     virtual void setPause (bool newState);
++    virtual bool isReadyForCapture () const { return true; }
+ 
+     /**
+      * @return The container to resolve files for this wallpaper
+diff --git a/src/WallpaperEngine/Render/Wallpapers/CWeb.cpp b/src/WallpaperEngine/Render/Wallpapers/CWeb.cpp
+--- a/src/WallpaperEngine/Render/Wallpapers/CWeb.cpp
++++ b/src/WallpaperEngine/Render/Wallpapers/CWeb.cpp
+@@ -2,6 +2,11 @@
+ // https://github.com/if1live/cef-gl-example
+ // https://github.com/andmcgregor/cefgui
+ #include "CWeb.h"
++#include "WallpaperEngine/Data/JSON.h"
++#include "WallpaperEngine/Data/Model/Property.h"
++#include <cmath>
++#include <filesystem>
++#include <sstream>
+ #include "WallpaperEngine/WebBrowser/CEF/WPSchemeHandlerFactory.h"
+ 
+ #include "WallpaperEngine/Data/Model/Project.h"
+@@ -17,6 +22,41 @@
+     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext, WebBrowserContext& browserContext,
+     const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
+ ) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode), m_browserContext (browserContext) {
++    using WallpaperEngine::Data::JSON::JSON;
++    JSON properties = JSON::object ();
++    JSON directories = JSON::object ();
++    for (const auto& [name, property] : getWeb ().project.properties) {
++        JSON value;
++        switch (property->getType ()) {
++            case DynamicValue::Boolean: value = property->getBool (); break;
++            case DynamicValue::Int: value = property->getInt (); break;
++            case DynamicValue::Float: value = property->getFloat (); break;
++            case DynamicValue::Null: value = nullptr; break;
++            default: {
++                std::string text = property->toString ();
++                if (property->getType () == DynamicValue::Vec2 || property->getType () == DynamicValue::Vec3 || property->getType () == DynamicValue::Vec4)
++                    text.erase (std::remove (text.begin (), text.end (), ','), text.end ());
++                value = text;
++                break;
++            }
++        }
++        properties[name] = { { "value", value } };
++        if (property->is<PropertyFile> () && property->getType () == DynamicValue::String) {
++            const std::filesystem::path directory = property->getString ();
++            std::error_code error;
++            if (std::filesystem::is_directory (directory, error)) {
++                JSON files = JSON::array ();
++                size_t count = 0;
++                for (const auto& file : std::filesystem::directory_iterator (directory, error)) {
++                    if (file.is_regular_file (error)) files.push_back (file.path ().string ());
++                    if (++count >= 4096) break;
++                }
++                directories[name] = files;
++            }
++        }
++    }
++    m_webProperties = properties.dump ();
++    m_webDirectories = directories.dump ();
+     // setup framebuffers
+     this->setupFramebuffers ();
+ 
+@@ -27,7 +67,7 @@
+ 
+     CefBrowserSettings browserSettings;
+     // documentaion says that 60 fps is maximum value
+-    browserSettings.windowless_frame_rate = std::max (60, context.getApp ().getContext ().settings.render.maximumFPS);
++    browserSettings.windowless_frame_rate = std::clamp ( context.getApp ().getContext ().settings.render.maximumFPS, 1, 60);
+ 
+     this->m_client = new WebBrowser::CEF::BrowserClient (m_renderHandler);
+     // use the custom scheme for the wallpaper's files
+@@ -77,6 +117,22 @@
+     // We might actually try to use cef to execute javascript, and not using off-screen rendering at all
+     // But for now let it be like this
+     //  glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
++    if (m_browser && m_browser->GetMainFrame ()) {
++        using WallpaperEngine::Data::JSON::JSON;
++        JSON audio = JSON::array ();
++        const auto& recorder = getAudioContext ().getRecorder ();
++        for (int channel = 0; channel < 2; ++channel)
++            for (int band = 0; band < 64; ++band) audio.push_back (std::isfinite (recorder.audio64[band]) ? recorder.audio64[band] : 0.0f);
++        const int fps = getContext ().getApp ().getContext ().settings.render.maximumFPS;
++        std::string source = "window.__wpeDirectoryFiles=" + m_webDirectories + ";";
++        source += "if(window.wallpaperPropertyListener&&!window.__wpePropertiesApplied){";
++        source += "const l=window.wallpaperPropertyListener;";
++        source += "if(l.applyUserProperties)l.applyUserProperties(" + m_webProperties + ");";
++        source += "if(l.applyGeneralProperties)l.applyGeneralProperties({fps:" + std::to_string (fps) + ",audioprocessing:true});";
++        source += "window.__wpePropertiesApplied=true;}";
++        source += "if(window.__wpeDeliverAudio)window.__wpeDeliverAudio(" + audio.dump () + ");";
++        m_browser->GetMainFrame ()->ExecuteJavaScript (source, "wpe://bridge", 1);
++    }
+     CefDoMessageLoopWork ();
+ }
+ 
+@@ -119,5 +175,10 @@
+     CefDoMessageLoopWork ();
+     this->m_browser->GetHost ()->CloseBrowser (true);
+ 
+-    delete this->m_renderHandler;
++    // BrowserClient owns the reference-counted render handler.
++    this->m_renderHandler = nullptr;
+ }
++
++bool CWeb::isReadyForCapture () const {
++    return m_client && m_client->mainFrameLoaded && m_paintedFrames >= 2;
++}
+diff --git a/src/WallpaperEngine/Render/Wallpapers/CWeb.h b/src/WallpaperEngine/Render/Wallpapers/CWeb.h
+--- a/src/WallpaperEngine/Render/Wallpapers/CWeb.h
++++ b/src/WallpaperEngine/Render/Wallpapers/CWeb.h
+@@ -35,6 +35,8 @@
+     [[nodiscard]] int getHeight () const override { return this->m_height; }
+ 
+     void setSize (int width, int height);
++    bool isReadyForCapture () const override;
++    void paintedFrame () { ++m_paintedFrames; }
+ 
+ protected:
+     void renderFrame (const glm::ivec4& viewport) override;
+@@ -49,6 +51,9 @@
+     CefRefPtr<WallpaperEngine::WebBrowser::CEF::BrowserClient> m_client = nullptr;
+     WallpaperEngine::WebBrowser::CEF::RenderHandler* m_renderHandler = nullptr;
+ 
++    unsigned int m_paintedFrames = 0;
++    std::string m_webProperties;
++    std::string m_webDirectories;
+     int m_width = 16;
+     int m_height = 17;
+ 
+diff --git a/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp b/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp
+--- a/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp
++++ b/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp
+@@ -1,7 +1,19 @@
+ #include "BrowserClient.h"
++#include "WallpaperEngine/Logging/Log.h"
+ 
+ using namespace WallpaperEngine::WebBrowser::CEF;
+ 
+ BrowserClient::BrowserClient (CefRefPtr<CefRenderHandler> ptr) : m_renderHandler (std::move (ptr)) { }
+ 
+-CefRefPtr<CefRenderHandler> BrowserClient::GetRenderHandler () { return m_renderHandler; }
+\ No newline at end of file
++CefRefPtr<CefRenderHandler> BrowserClient::GetRenderHandler () { return m_renderHandler; }
++bool BrowserClient::OnConsoleMessage (CefRefPtr<CefBrowser>, cef_log_severity_t level,
++                                     const CefString& message, const CefString& source, int line) {
++    if (level >= LOGSEVERITY_WARNING)
++        sLog.error ("WebScript [", source.ToString (), ":", line, "]: ", message.ToString ());
++    return false;
++}
++void BrowserClient::OnLoadError (CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, ErrorCode code,
++                                const CefString& message, const CefString& url) {
++    if (code != ERR_ABORTED)
++        sLog.error ("WebLoad [", url.ToString (), "]: ", message.ToString (), " (", int (code), ")");
++}
+diff --git a/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.h b/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.h
+--- a/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.h
++++ b/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.h
+@@ -7,12 +7,22 @@
+ //! \brief Provide access to browser-instance-specific callbacks. A single
+ //! CefClient instance can be shared among any number of browsers.
+ // *************************************************************************
+-class BrowserClient : public CefClient {
++class BrowserClient : public CefClient, public CefDisplayHandler, public CefLoadHandler {
+ public:
+     explicit BrowserClient (CefRefPtr<CefRenderHandler> ptr);
+ 
+     [[nodiscard]] CefRefPtr<CefRenderHandler> GetRenderHandler () override;
+ 
++    CefRefPtr<CefDisplayHandler> GetDisplayHandler () override { return this; }
++    CefRefPtr<CefLoadHandler> GetLoadHandler () override { return this; }
++    bool OnConsoleMessage (CefRefPtr<CefBrowser>, cef_log_severity_t level, const CefString& message,
++                           const CefString& source, int line) override;
++    void OnLoadError (CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, ErrorCode code,
++                      const CefString& message, const CefString& url) override;
++    void OnLoadEnd (CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, int) override {
++        if (frame->IsMain ()) mainFrameLoaded = true;
++    }
++    bool mainFrameLoaded = false;
+     CefRefPtr<CefRenderHandler> m_renderHandler = nullptr;
+ 
+     IMPLEMENT_REFCOUNTING (BrowserClient);
+diff --git a/src/WallpaperEngine/WebBrowser/CEF/RenderHandler.cpp b/src/WallpaperEngine/WebBrowser/CEF/RenderHandler.cpp
+--- a/src/WallpaperEngine/WebBrowser/CEF/RenderHandler.cpp
++++ b/src/WallpaperEngine/WebBrowser/CEF/RenderHandler.cpp
+@@ -18,10 +18,11 @@
+     glBindTexture (GL_TEXTURE_2D, this->texture ());
+     glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, buffer);
+     glBindTexture (GL_TEXTURE_2D, 0);
++    m_webdata->paintedFrame ();
+ }
+ 
+ int RenderHandler::getWidth () const { return this->m_webdata->getWidth (); }
+ 
+ int RenderHandler::getHeight () const { return this->m_webdata->getHeight (); }
+ 
+-GLuint RenderHandler::texture () const { return this->m_webdata->getWallpaperFramebuffer (); }
+\ No newline at end of file
++GLuint RenderHandler::texture () const { return this->m_webdata->getWallpaperTexture (); }
+\ No newline at end of file
+diff --git a/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp b/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp
+--- a/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp
++++ b/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp
+@@ -1,4 +1,5 @@
+ #include "SubprocessApp.h"
++#include "include/cef_v8.h"
+ #include "WPSchemeHandlerFactory.h"
+ #include "WallpaperEngine/Data/Model/Project.h"
+ 
+@@ -27,4 +28,28 @@
+ 
+ const std::map<std::string, WPSchemeHandlerFactory*>& SubprocessApp::getHandlerFactories () const {
+     return this->m_handlerFactories;
+-}
+\ No newline at end of file
++}
++void SubprocessApp::OnContextCreated (CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefV8Context> context) {
++    const char* source = R"JS(
++(function() {
++    window.__wpeAudioCallbacks = [];
++    window.wallpaperRegisterAudioListener = function(callback) {
++        if (typeof callback !== 'function') throw new TypeError('Audio listener must be a function');
++        window.__wpeAudioCallbacks.push(callback);
++    };
++    window.wallpaperRequestRandomFileForProperty = function(property, callback) {
++        const files = (window.__wpeDirectoryFiles || {})[property] || [];
++        const path = files.length ? files[Math.floor(Math.random() * files.length)] : '';
++        if (typeof callback === 'function') setTimeout(() => callback(property, path), 0);
++    };
++    window.__wpeDeliverAudio = function(data) {
++        for (const callback of window.__wpeAudioCallbacks) {
++            try { callback(data.slice()); } catch (error) { console.error(error); }
++        }
++    };
++})();
++)JS";
++    CefRefPtr<CefV8Value> result;
++    CefRefPtr<CefV8Exception> exception;
++    context->Eval (source, "wpe://bridge", 1, result, exception);
++}
+diff --git a/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.h b/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.h
+--- a/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.h
++++ b/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.h
+@@ -9,10 +9,12 @@
+ }
+ 
+ namespace WallpaperEngine::WebBrowser::CEF {
+-class SubprocessApp : public CefApp {
++class SubprocessApp : public CefApp, public CefRenderProcessHandler {
+ public:
+     explicit SubprocessApp (WallpaperEngine::Application::WallpaperApplication& application);
+ 
++    CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler () override { return this; }
++    void OnContextCreated (CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefV8Context> context) override;
+     void OnRegisterCustomSchemes (CefRawPtr<CefSchemeRegistrar> registrar) override;
+ 
+ protected:
+diff --git a/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp b/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
+--- a/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
++++ b/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
+@@ -28,7 +28,8 @@
+     }
+ 
+     const std::string host = CefString (&parts.host);
+-    const std::string path = CefString (&parts.path);
++    const std::string path = CefURIDecode (CefString (&parts.path), true,
++        static_cast<cef_uri_unescape_rule_t> (UU_NORMAL | UU_SPACES | UU_URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS));
+ 
+     const std::string file = path.substr (1);
+ 
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -683,11 +683,15 @@
+ add_dependencies(linux-wallpaperengine-lib libcef_dll_wrapper glslang spirv-cross-core spirv-cross-glsl)
+ # custom version of cef's SET_EXECUTABLE_TARGET_PROPERTIES that fixes C files being compiled with the wrong parameters
+ REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(linux-wallpaperengine-lib)
++# CEF resolves ICU/locales relative to its loaded module. Prefer the copied runtime
++# next to this library instead of the SDK Release directory.
++set_target_properties(linux-wallpaperengine-lib PROPERTIES BUILD_RPATH "\$ORIGIN")
+ 
+ add_executable(linux-wallpaperengine
+     src/main.cpp)
+ 
+ target_link_libraries (linux-wallpaperengine PUBLIC linux-wallpaperengine-lib)
++set_target_properties(linux-wallpaperengine PROPERTIES BUILD_RPATH "\$ORIGIN")
+ 
+ # Install the main executable and shared library via install(TARGETS)
+ # so that CMake automatically strips/replaces the build-time RPATH.

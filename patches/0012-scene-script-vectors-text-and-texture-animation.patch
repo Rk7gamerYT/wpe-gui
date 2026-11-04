@@ -1,0 +1,1124 @@
+diff --git a/src/WallpaperEngine/Data/Model/Object.h b/src/WallpaperEngine/Data/Model/Object.h
+--- a/src/WallpaperEngine/Data/Model/Object.h
++++ b/src/WallpaperEngine/Data/Model/Object.h
+@@ -177,7 +177,7 @@
+     float delay;
+     float duration;
+     glm::vec2 audioProcessingBounds;
+-    int audioProcessingExponent;
++    float audioProcessingExponent;
+     int audioProcessingFrequencyStart;
+     int audioProcessingFrequencyEnd;
+     int audioProcessingMode;
+@@ -402,7 +402,8 @@
+ 	UserSettingUniquePtr distanceInner, UserSettingUniquePtr distanceOuter, UserSettingUniquePtr speedInner,
+ 	UserSettingUniquePtr speedOuter, UserSettingUniquePtr centerForce, UserSettingUniquePtr ringRadius,
+ 	UserSettingUniquePtr ringWidth, UserSettingUniquePtr ringPullDistance, UserSettingUniquePtr ringPullForce,
+-	UserSettingUniquePtr audioProcessingMode, UserSettingUniquePtr audioProcessingBounds
++	UserSettingUniquePtr audioProcessingMode, UserSettingUniquePtr audioProcessingBounds,
++        UserSettingUniquePtr audioExponent, UserSettingUniquePtr audioStart, UserSettingUniquePtr audioEnd
+     ) :
+ 	controlPoint (controlPoint), flags (flags), axis (std::move (axis)), offset (std::move (offset)),
+ 	distanceInner (std::move (distanceInner)), distanceOuter (std::move (distanceOuter)),
+@@ -410,7 +411,10 @@
+ 	ringRadius (std::move (ringRadius)), ringWidth (std::move (ringWidth)),
+ 	ringPullDistance (std::move (ringPullDistance)), ringPullForce (std::move (ringPullForce)),
+ 	audioProcessingMode (std::move (audioProcessingMode)),
+-	audioProcessingBounds (std::move (audioProcessingBounds)) { }
++	audioProcessingBounds (std::move (audioProcessingBounds)),
++        audioProcessingExponent (std::move (audioExponent)),
++        audioProcessingFrequencyStart (std::move (audioStart)),
++        audioProcessingFrequencyEnd (std::move (audioEnd)) { }
+     int controlPoint;
+     int flags; // 1 = infinite axis, 2 = maintain distance to center, 4 = ring shape
+     UserSettingUniquePtr axis;
+@@ -426,6 +430,7 @@
+     UserSettingUniquePtr ringPullForce; // Ring mode: strength of ring attraction
+     UserSettingUniquePtr audioProcessingMode;
+     UserSettingUniquePtr audioProcessingBounds;
++    UserSettingUniquePtr audioProcessingExponent, audioProcessingFrequencyStart, audioProcessingFrequencyEnd;
+ };
+ 
+ class ControlPointAttractOperator : public ParticleOperatorBase {
+@@ -612,6 +617,7 @@
+     std::string verticalalign;
+     /** Padding inside the bounding box */
+     glm::vec2 padding;
++    UserSettingUniquePtr paddingSetting;
+     // TODO: PARSE LIMITS TOO!
+ };
+ 
+diff --git a/src/WallpaperEngine/Data/Parsers/ObjectParser.cpp b/src/WallpaperEngine/Data/Parsers/ObjectParser.cpp
+--- a/src/WallpaperEngine/Data/Parsers/ObjectParser.cpp
++++ b/src/WallpaperEngine/Data/Parsers/ObjectParser.cpp
+@@ -119,8 +119,12 @@
+ 
+ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, ObjectData base) {
+     glm::vec2 padding (0.0f);
++    UserSettingUniquePtr paddingSetting;
+     if (auto field = it.optional ("padding")) {
+-        if (field->is_number ()) padding = glm::vec2 (field->get<float> ());
++        if (field->is_object ()) {
++            paddingSetting = it.user ("padding", project.properties, glm::vec2 (0.0f));
++            padding = paddingSetting->value->getVec2 ();
++        } else if (field->is_number ()) padding = glm::vec2 (field->get<float> ());
+         else padding = Builders::VectorBuilder::parse<glm::vec2> (field->get<std::string> ());
+     }
+     return std::make_unique<Text> (
+@@ -137,6 +141,7 @@
+ 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
+ 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
+ 	    .padding = padding,
++            .paddingSetting = std::move (paddingSetting),
+ 	}
+     );
+ }
+@@ -606,7 +611,7 @@
+ 	    .delay = it.optional ("delay", 0.0f),
+ 	    .duration = it.optional ("duration", 0.0f),
+ 	    .audioProcessingBounds = parseVec2 ("audioprocessingbounds", glm::vec2 (0.8f, 1.0f)),
+-	    .audioProcessingExponent = it.optional ("audioprocessingexponent", 2),
++	    .audioProcessingExponent = it.optional ("audioprocessingexponent", 2.0f),
+ 	    .audioProcessingFrequencyStart = it.optional ("audioprocessingfrequencystart", 0),
+ 	    .audioProcessingFrequencyEnd = it.optional ("audioprocessingfrequencyend", 1),
+ 	    .audioProcessingMode = it.optional ("audioprocessingmode", 0),
+@@ -727,7 +732,10 @@
+ 	    it.user ("ringradius", properties, 300.0f), it.user ("ringwidth", properties, 50.0f),
+ 	    it.user ("ringpulldistance", properties, 50.0f), it.user ("ringpullforce", properties, 10.0f),
+ 	    it.user ("audioprocessingmode", properties, 0),
+-	    it.user ("audioprocessingbounds", properties, glm::vec2 (0.0f, 1.0f))
++	    it.user ("audioprocessingbounds", properties, glm::vec2 (0.0f, 1.0f)),
++            it.user ("audioprocessingexponent", properties, 1.0f),
++            it.user ("audioprocessingfrequencystart", properties, 0),
++            it.user ("audioprocessingfrequencyend", properties, 15)
+ 	);
+     } else if (name == "controlpointattract") {
+ 	return std::make_unique<ControlPointAttractOperator> (
+diff --git a/src/WallpaperEngine/Render/Objects/CRenderable.cpp b/src/WallpaperEngine/Render/Objects/CRenderable.cpp
+--- a/src/WallpaperEngine/Render/Objects/CRenderable.cpp
++++ b/src/WallpaperEngine/Render/Objects/CRenderable.cpp
+@@ -1,4 +1,6 @@
+ #include "CRenderable.h"
++#include <cmath>
++#include <algorithm>
+ 
+ #include "WallpaperEngine/Data/Model/Material.h"
+ #include "WallpaperEngine/Data/Model/Object.h"
+@@ -38,4 +40,48 @@
+ 
+ std::shared_ptr<const TextureProvider> CRenderable::getTexture () const { return this->m_texture; }
+ 
+-double CRenderable::getAnimationTime () const { return this->m_animationTime; }
+\ No newline at end of file
++double CRenderable::getAnimationTime () const { return this->m_animationTime; }
++uint32_t CRenderable::getAnimationFrameCount () const {
++    return m_texture ? m_texture->getFrames ().size () : 0;
++}
++double CRenderable::getAnimationPosition () const {
++    const double now = getContext ().getDriver ().getRenderTime ();
++    if (!m_scriptAnimationControlled) return now;
++    const double dt = std::max (0.0, now - m_scriptAnimationLast);
++    if (m_scriptAnimationPlaying) m_scriptAnimationPosition += dt * m_scriptAnimationRate;
++    m_scriptAnimationLast = now;
++    return m_scriptAnimationPosition;
++}
++uint32_t CRenderable::getAnimationFrame () const {
++    if (!m_texture || m_animationTime <= 0 || getAnimationFrameCount () == 0) return 0;
++    double time = std::fmod (getAnimationPosition (), m_animationTime);
++    if (time < 0) time += m_animationTime;
++    uint32_t index = 0;
++    for (const auto& frame : m_texture->getFrames ()) {
++        time -= frame->frametime;
++        if (time <= 0) return index;
++        ++index;
++    }
++    return getAnimationFrameCount () - 1;
++}
++void CRenderable::setAnimationPlaying (bool playing) {
++    const double position = getAnimationPosition ();
++    m_scriptAnimationPosition = position;
++    m_scriptAnimationLast = getContext ().getDriver ().getRenderTime ();
++    m_scriptAnimationControlled = true;
++    m_scriptAnimationPlaying = playing;
++}
++void CRenderable::setAnimationRate (double rate) {
++    if (!std::isfinite (rate)) return;
++    setAnimationPlaying (m_scriptAnimationPlaying);
++    m_scriptAnimationRate = rate;
++}
++void CRenderable::setAnimationFrame (double frame) {
++    if (!std::isfinite (frame) || !m_texture || getAnimationFrameCount () == 0) return;
++    const auto index = static_cast<uint32_t> (std::clamp (frame, 0.0, double (getAnimationFrameCount () - 1)));
++    setAnimationPlaying (m_scriptAnimationPlaying);
++    m_scriptAnimationPosition = 0;
++    for (uint32_t i = 0; i < index; ++i) m_scriptAnimationPosition += m_texture->getFrames ()[i]->frametime;
++    // Frame selection uses an interior time so an exact boundary cannot select the previous frame.
++    m_scriptAnimationPosition += m_texture->getFrames ()[index]->frametime * 0.001;
++}
+diff --git a/src/WallpaperEngine/Render/Objects/CRenderable.h b/src/WallpaperEngine/Render/Objects/CRenderable.h
+--- a/src/WallpaperEngine/Render/Objects/CRenderable.h
++++ b/src/WallpaperEngine/Render/Objects/CRenderable.h
+@@ -21,6 +21,15 @@
+     [[nodiscard]] double getAnimationTime () const;
+ 
+     void setup () override;
++    double getAnimationPosition () const;
++    uint32_t getAnimationFrame () const;
++    void setAnimationFrame (double frame);
++    void setAnimationPlaying (bool playing);
++    void setAnimationRate (double rate);
++    double getAnimationRate () const { return m_scriptAnimationRate; }
++    bool isAnimationPlaying () const { return m_scriptAnimationPlaying; }
++    uint32_t getAnimationFrameCount () const;
++
+ 
+     [[nodiscard]] virtual const float& getBrightness () const = 0;
+     [[nodiscard]] virtual const float& getUserAlpha () const = 0;
+@@ -33,6 +42,12 @@
+     void detectTexture ();
+ 
+     double m_animationTime = 0.0;
++    mutable double m_scriptAnimationPosition = 0;
++    mutable double m_scriptAnimationLast = 0;
++    mutable bool m_scriptAnimationControlled = false;
++    bool m_scriptAnimationPlaying = true;
++    double m_scriptAnimationRate = 1;
++
+ 
+     std::shared_ptr<const TextureProvider> m_texture = nullptr;
+     const Material& m_material;
+diff --git a/src/WallpaperEngine/Render/Objects/CText.cpp b/src/WallpaperEngine/Render/Objects/CText.cpp
+--- a/src/WallpaperEngine/Render/Objects/CText.cpp
++++ b/src/WallpaperEngine/Render/Objects/CText.cpp
+@@ -74,7 +74,12 @@
+ } // namespace
+ 
+ CText::CText (Wallpapers::CScene& scene, const Text& text) :
+-    CObject (scene, text), ScriptableObject (scene, text), m_text (text) {
++    CObject (scene, text), ScriptableObject (scene, text), m_scriptFont (text.font), m_lastFont (text.font), m_scriptSize (text.size),
++    m_horizontalAlign (text.alignment), m_verticalAlign (text.verticalalign), m_text (text) {
++    this->registerProperty ("font", m_scriptFont);
++    this->registerProperty ("size", m_scriptSize);
++    this->registerProperty ("horizontalalign", m_horizontalAlign);
++    this->registerProperty ("verticalalign", m_verticalAlign);
+     this->registerProperty ("color", *text.color->value);
+     this->registerProperty ("alpha", *text.alpha->value);
+     this->registerProperty ("origin", *text.origin->value);
+@@ -82,6 +87,7 @@
+     this->registerProperty ("visible", *text.visible->value);
+     this->registerProperty ("pointSize", *text.pointSize->value);
+     this->registerProperty ("text", *text.text->value);
++    if (text.paddingSetting) this->registerProperty ("padding", *text.paddingSetting->value);
+     this->registerProperty ("angles", *text.groupAngles->value);
+ }
+ 
+@@ -147,12 +153,12 @@
+     // Wallpapers packed in .pkg don't expose physical paths, so we read the font
+     // into memory and use FT_New_Memory_Face. m_fontData must outlive the face.
+     // `systemfont_*` references signal "use a system font"; let the fallback handle them.
+-    if (m_text.font.empty () || m_text.font.rfind ("systemfont_", 0) == 0) {
++    if (m_scriptFont.getString ().empty () || m_scriptFont.getString ().rfind ("systemfont_", 0) == 0) {
+ 	return false;
+     }
+ 
+     try {
+-	auto stream = getAssetLocator ().read (m_text.font);
++	auto stream = getAssetLocator ().read (m_scriptFont.getString ());
+ 	stream->seekg (0, std::ios::end);
+ 	const auto size = stream->tellg ();
+ 	stream->seekg (0, std::ios::beg);
+@@ -206,54 +212,68 @@
+ }
+ 
+ void CText::rebuildTextureFrom (const std::string& text) {
+-    // Two-pass rasterization: first measure the bounding box, then rasterize
+-    // every glyph into a single grayscale bitmap. Phase 1 renders one line —
+-    // multi-line wrapping, alignment, and padding come with Phase 2.
+-    //
+-    // Safe to call repeatedly: GL handles (texture, VAO, VBO) are reused when
+-    // already allocated, so dynamic/scripted text can regenerate the glyph
+-    // bitmap every time the rendered string changes without leaking.
++    // Decode UTF-8 before asking FreeType for glyphs; bytes are not code points.
++    std::vector<uint32_t> characters;
++    for (size_t i = 0; i < text.size ();) {
++        const auto first = static_cast<unsigned char> (text[i++]);
++        uint32_t code = first;
++        int continuation = first < 0x80 ? 0 : ((first & 0xe0) == 0xc0 ? 1 : ((first & 0xf0) == 0xe0 ? 2 : ((first & 0xf8) == 0xf0 ? 3 : -1)));
++        if (continuation < 0) { characters.push_back (0xfffd); continue; }
++        code &= continuation == 0 ? 0x7f : (0x7f >> (continuation + 1));
++        bool valid = i + continuation <= text.size ();
++        for (int j = 0; valid && j < continuation; ++j) {
++            const auto next = static_cast<unsigned char> (text[i]);
++            if ((next & 0xc0) != 0x80) { valid = false; break; }
++            code = (code << 6) | (next & 0x3f); ++i;
++        }
++        const uint32_t minimum[] = { 0, 0x80, 0x800, 0x10000 };
++        if (!valid || code < minimum[continuation] || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) code = 0xfffd;
++        if (code != '\r') characters.push_back (code);
++    }
+     FT_GlyphSlot slot = m_ftFace->glyph;
+-
+-    int penX = 0;
+-    int maxAscent = 0;
+-    int maxDescent = 0;
+-
+-    for (unsigned char c : text) {
+-	if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
+-	    continue;
+-	}
+-	penX += slot->advance.x >> 6;
+-	maxAscent = std::max (maxAscent, slot->bitmap_top);
+-	maxDescent = std::max (maxDescent, static_cast<int> (slot->bitmap.rows) - slot->bitmap_top);
+-    }
+-
+-    const int width = std::max (1, penX);
+-    const int height = std::max (1, maxAscent + maxDescent);
++    std::vector<int> lineWidths (1, 0);
++    int ascent = 0, descent = 0;
++    for (uint32_t code : characters) {
++        if (code == '\n') { lineWidths.push_back (0); continue; }
++        if (FT_Load_Char (m_ftFace, code, FT_LOAD_RENDER) != 0) continue;
++        lineWidths.back () += slot->advance.x >> 6;
++        ascent = std::max (ascent, slot->bitmap_top);
++        descent = std::max (descent, static_cast<int> (slot->bitmap.rows) - slot->bitmap_top);
++    }
++    const glm::vec2 rawPadding = m_text.paddingSetting ? m_text.paddingSetting->value->getVec2 () : m_text.padding;
++    m_lastPadding = rawPadding;
++
++    const int paddingX = std::clamp (std::isfinite (rawPadding.x) ? int (std::clamp (rawPadding.x, 0.0f, 2048.0f)) : 0, 0, 2048);
++    const int paddingY = std::clamp (std::isfinite (rawPadding.y) ? int (std::clamp (rawPadding.y, 0.0f, 2048.0f)) : 0, 0, 2048);
++    const int lineHeight = std::max (ascent + descent, int (m_ftFace->size->metrics.height >> 6));
++    GLint maximum = 0; glGetIntegerv (GL_MAX_TEXTURE_SIZE, &maximum);
++    maximum = std::min (maximum, 16384);
++    const int contentWidth = *std::max_element (lineWidths.begin (), lineWidths.end ());
++    const int width = std::clamp (contentWidth + 2 * paddingX, 1, maximum);
++    const int height = std::clamp (ascent + descent + int (lineWidths.size () - 1) * lineHeight + 2 * paddingY, 1, maximum);
++    m_scriptSize.update (glm::vec2 (width, height), DynamicValue::UpdateSource::Script);
+     std::vector<uint8_t> pixels (static_cast<size_t> (width) * height, 0);
+-
+-    penX = 0;
+-    for (unsigned char c : text) {
+-	if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
+-	    continue;
+-	}
+-
+-	const auto& bmp = slot->bitmap;
+-	const int originX = penX + slot->bitmap_left;
+-	const int originY = maxAscent - slot->bitmap_top;
+-
+-	for (unsigned int row = 0; row < bmp.rows; ++row) {
+-	    for (unsigned int col = 0; col < bmp.width; ++col) {
+-		const int dstX = originX + static_cast<int> (col);
+-		const int dstY = originY + static_cast<int> (row);
+-		if (dstX < 0 || dstX >= width || dstY < 0 || dstY >= height) {
+-		    continue;
+-		}
+-		pixels[static_cast<size_t> (dstY) * width + dstX] = bmp.buffer[row * bmp.pitch + col];
+-	    }
+-	}
+-
+-	penX += slot->advance.x >> 6;
++    size_t line = 0;
++    auto startX = [&] () {
++        if (m_horizontalAlign.getString () == "right") return paddingX + contentWidth - lineWidths[line];
++        if (m_horizontalAlign.getString () == "center") return paddingX + (contentWidth - lineWidths[line]) / 2;
++        return paddingX;
++    };
++    int penX = startX ();
++    for (uint32_t code : characters) {
++        if (code == '\n') { ++line; penX = startX (); continue; }
++        if (FT_Load_Char (m_ftFace, code, FT_LOAD_RENDER) != 0) continue;
++        const auto& bitmap = slot->bitmap;
++        const int originX = penX + slot->bitmap_left;
++        const int originY = paddingY + ascent + int (line) * lineHeight - slot->bitmap_top;
++        for (unsigned int row = 0; row < bitmap.rows; ++row) {
++            for (unsigned int column = 0; column < bitmap.width; ++column) {
++                const int x = originX + int (column), y = originY + int (row);
++                if (x >= 0 && x < width && y >= 0 && y < height)
++                    pixels[size_t (y) * width + x] = bitmap.buffer[row * bitmap.pitch + column];
++            }
++        }
++        penX += slot->advance.x >> 6;
+     }
+ 
+     const bool firstUpload = (m_texture == 0);
+@@ -318,14 +338,17 @@
+     // done via the model matrix using the object's origin/scale. VBO contents
+     // are re-uploaded whenever the glyph bitmap is rebuilt so the quad always
+     // matches the current texture dimensions.
+-    const float hx = m_quadSize.x * 0.5f;
+-    const float hy = m_quadSize.y * 0.5f;
+-    // With vflip=true (Wayland/GLFW), GL y- = screen top. So the quad bottom (y=-hy,
+-    // lower GL y) appears at screen top. UV.v=0 here = FT glyph top → shows at screen top ✓
++    m_lastHorizontalAlign = m_horizontalAlign.getString ();
++    m_lastVerticalAlign = m_verticalAlign.getString ();
++    const float left = m_lastHorizontalAlign == "left" ? 0 :
++        (m_lastHorizontalAlign == "right" ? -m_quadSize.x : -m_quadSize.x * .5f);
++    const float top = m_lastVerticalAlign == "top" ? 0 :
++        (m_lastVerticalAlign == "bottom" ? -m_quadSize.y : -m_quadSize.y * .5f);
++    const float right = left + m_quadSize.x;
++    const float bottom = top + m_quadSize.y;
+     const float verts[] = {
+-	// pos        // uv
+-	-hx, -hy, 0.0f, 0.0f, hx, -hy, 1.0f, 0.0f, hx,  hy, 1.0f, 1.0f,
+-	-hx, -hy, 0.0f, 0.0f, hx, hy,  1.0f, 1.0f, -hx, hy, 0.0f, 1.0f,
++        left, top, 0, 0, right, top, 1, 0, right, bottom, 1, 1,
++        left, top, 0, 0, right, bottom, 1, 1, left, bottom, 0, 1,
+     };
+ 
+     const bool firstUpload = (m_vao == 0);
+@@ -363,15 +386,28 @@
+     const auto& currentText = m_text.text->value->getString ();
+     const std::string renderedText = currentText.empty () ? std::string (" ") : currentText;
+ 
++    if (m_lastFont != m_scriptFont.getString ()) {
++        if (m_ftFace) FT_Done_Face (m_ftFace);
++        m_ftFace = nullptr;
++        m_fontData.clear ();
++        if (!loadEmbeddedFont () && !loadSystemFont ()) { m_valid = false; return; }
++        m_lastFont = m_scriptFont.getString ();
++        m_lastPixelSize = computeEffectivePixelSize ();
++        FT_Set_Pixel_Sizes (m_ftFace, 0, m_lastPixelSize);
++        rebuildTextureFrom (renderedText);
++    }
+     const unsigned int pixelSize = computeEffectivePixelSize ();
+     if (pixelSize != m_lastPixelSize) {
+ 	m_lastPixelSize = pixelSize;
+ 	FT_Set_Pixel_Sizes (m_ftFace, 0, static_cast<FT_UInt> (m_lastPixelSize));
+ 	rebuildTextureFrom (renderedText);
+-    } else if (renderedText != m_lastRenderedText) {
++    } else if (renderedText != m_lastRenderedText ||
++               (m_text.paddingSetting ? m_text.paddingSetting->value->getVec2 () : m_text.padding) != m_lastPadding) {
+ 	rebuildTextureFrom (renderedText);
+     }
+ 
++    if (m_lastHorizontalAlign != m_horizontalAlign.getString () || m_lastVerticalAlign != m_verticalAlign.getString ())
++        rebuildTextureFrom (renderedText);
+     const glm::vec4 color = m_text.color->value->getVec4 ();
+     const float alpha = m_text.alpha->value->getFloat ();
+     const glm::vec3 scale = m_text.scale->value->getVec3 ();
+diff --git a/src/WallpaperEngine/Render/Objects/CText.h b/src/WallpaperEngine/Render/Objects/CText.h
+--- a/src/WallpaperEngine/Render/Objects/CText.h
++++ b/src/WallpaperEngine/Render/Objects/CText.h
+@@ -59,6 +59,11 @@
+     bool loadSystemFont ();
+     unsigned int computeEffectivePixelSize () const;
+ 
++    DynamicValue m_scriptFont;
++    std::string m_lastFont;
++    DynamicValue m_scriptSize;
++    DynamicValue m_horizontalAlign;
++    DynamicValue m_verticalAlign;
+     const Text& m_text;
+     std::string m_lastRenderedText;
+     unsigned int m_lastPixelSize = 0;
+@@ -77,6 +82,8 @@
+     GLint m_uTexture = -1;
+ 
+     glm::ivec2 m_textureSize = { 0, 0 };
++    glm::vec2 m_lastPadding = { -1, -1 };
++    std::string m_lastHorizontalAlign, m_lastVerticalAlign;
+     glm::vec2 m_quadSize = { 0.0f, 0.0f };
+ 
+     bool m_valid = false;
+diff --git a/src/WallpaperEngine/Render/Objects/Effects/CPass.cpp b/src/WallpaperEngine/Render/Objects/Effects/CPass.cpp
+--- a/src/WallpaperEngine/Render/Objects/Effects/CPass.cpp
++++ b/src/WallpaperEngine/Render/Objects/Effects/CPass.cpp
+@@ -6,6 +6,8 @@
+ 
+ #include "WallpaperEngine/Data/Model/Effect.h"
+ #include "WallpaperEngine/Data/Model/Material.h"
++#include "WallpaperEngine/Data/Model/Project.h"
++#include "WallpaperEngine/Data/Model/Property.h"
+ 
+ #include "WallpaperEngine/Render/CFBO.h"
+ #include "WallpaperEngine/Render/Objects/CImage.h"
+@@ -251,9 +253,14 @@
+ 	return state;
+     }
+ 
++    double duration = 0;
++    for (const auto& frame : texture->getFrames ()) duration += frame->frametime;
++    if (duration <= 0) return state;
+     double currentRenderTime = fmod (
+-	static_cast<double> (this->getContext ().getDriver ().getRenderTime ()), this->m_renderable.getAnimationTime ()
++	texture == m_renderable.getTexture () ? m_renderable.getAnimationPosition ()
++            : static_cast<double> (this->getContext ().getDriver ().getRenderTime ()), duration
+     );
++    if (currentRenderTime < 0) currentRenderTime += duration;
+ 
+     for (const auto& frameCur : texture->getFrames ()) {
+ 	currentRenderTime -= frameCur->frametime;
+@@ -629,6 +636,7 @@
+     const auto [vertex, fragment]
+ 	= Shaders::GLSLContext::get ().toGlsl (this->m_shader->vertex (), this->m_shader->fragment ());
+ 
++    if (vertex.empty () || fragment.empty ()) throw std::runtime_error ("Shader translation failed: " + shaderName);
+     // compile the shaders
+     const GLuint vertexShaderID = compileShader (vertex.c_str (), GL_VERTEX_SHADER);
+     const GLuint fragmentShaderID = compileShader (fragment.c_str (), GL_FRAGMENT_SHADER);
+@@ -752,10 +760,16 @@
+     }
+ 
+     for (const auto& [index, textureName] : this->m_pass.usertextures) {
++        const auto& properties = m_renderable.getScene ().getScene ().project.properties;
++        const auto property = properties.find (textureName);
++        const std::string resolvedName = property != properties.end () && property->second->getType () == DynamicValue::String
++            ? property->second->getString () : textureName;
++        // An unset optional file retains the material's authored fallback texture.
++        if (resolvedName.empty ()) continue;
+ 	try {
+-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
+-		? this->resolveFBO (textureName)
+-		: this->getContext ().resolveTexture (textureName);
++	    auto texture = resolvedName.find ("_rt_") == 0 || resolvedName.find ("_alias_") == 0
++		? this->resolveFBO (resolvedName)
++		: this->getContext ().resolveTexture (resolvedName);
+ 
+ 	    const auto it = this->m_textures.find (index);
+ 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
+@@ -789,10 +803,16 @@
+     }
+ 
+     for (const auto& [index, textureName] : this->m_override.usertextures) {
++        const auto& properties = m_renderable.getScene ().getScene ().project.properties;
++        const auto property = properties.find (textureName);
++        const std::string resolvedName = property != properties.end () && property->second->getType () == DynamicValue::String
++            ? property->second->getString () : textureName;
++        // An unset optional file retains the material's authored fallback texture.
++        if (resolvedName.empty ()) continue;
+ 	try {
+-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
+-		? this->resolveFBO (textureName)
+-		: this->getContext ().resolveTexture (textureName);
++	    auto texture = resolvedName.find ("_rt_") == 0 || resolvedName.find ("_alias_") == 0
++		? this->resolveFBO (resolvedName)
++		: this->getContext ().resolveTexture (resolvedName);
+ 
+ 	    const auto it = this->m_textures.find (index);
+ 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
+@@ -873,6 +893,7 @@
+     this->addUniform ("g_ModelViewProjectionMatrix", &this->m_modelViewProjectionMatrix);
+     this->addUniform ("g_EffectModelViewProjectionMatrix", &this->m_modelViewProjectionMatrix);
+     this->addUniform ("g_ModelMatrix", &this->m_modelMatrix);
++    this->addUniform ("g_LayerModelMatrix", &this->m_modelMatrix);
+     this->addUniform ("g_EffectModelMatrix", &this->m_modelMatrix);
+     this->addUniform ("g_NormalModelMatrix", glm::identity<glm::mat3> ());
+     this->addUniform ("g_ViewProjectionMatrix", &this->m_viewProjectionMatrix);
+diff --git a/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.cpp b/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.cpp
+--- a/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.cpp
++++ b/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.cpp
+@@ -2,6 +2,9 @@
+ 
+ #include <utility>
+ #include <cstring>
++#include <set>
++#include "WallpaperEngine/Render/Objects/CRenderable.h"
++#include <glm/gtc/matrix_transform.hpp>
+ 
+ #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
+ #include "WallpaperEngine/Scripting/ScriptEngine.h"
+@@ -20,6 +23,87 @@
+     WallpaperEngine::Scripting::ScriptableObject& object;
+ };
+ 
++static OpaqueScriptableObjectAdapter* scriptable_container (JSValueConst value) {
++    JSClassID id;
++    auto* container = static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (value, &id));
++    return container && container->magic == SCRIPTABLE_OPAQUE_MAGIC ? container : nullptr;
++}
++static glm::mat4 scriptable_world (ScriptableObject& object, std::set<int>& visiting) {
++    if (!visiting.insert (object.getId ()).second) return glm::mat4 (1);
++    const auto& properties = object.getProperties ();
++    auto vector = [&] (const char* name, glm::vec3 fallback) {
++        auto it = properties.find (name);
++        return it == properties.end () ? fallback : it->second.value.getVec3 ();
++    };
++    const glm::vec3 origin = vector ("origin", glm::vec3 (0));
++    const glm::vec3 angles = glm::radians (vector ("angles", glm::vec3 (0)));
++    glm::mat4 matrix = glm::translate (glm::mat4 (1), origin);
++    matrix = glm::rotate (matrix, angles.z, glm::vec3 (0,0,1));
++    matrix = glm::rotate (matrix, angles.y, glm::vec3 (0,1,0));
++    matrix = glm::rotate (matrix, angles.x, glm::vec3 (1,0,0));
++    matrix = glm::scale (matrix, vector ("scale", glm::vec3 (1)));
++    if (object.getObject ().parent) {
++        auto* parent = dynamic_cast<const ScriptableObject*> (object.getScene ().getObject (*object.getObject ().parent));
++        if (parent) matrix = scriptable_world (*const_cast<ScriptableObject*> (parent), visiting) * matrix;
++    }
++    visiting.erase (object.getId ());
++    return matrix;
++}
++static JSValue scriptable_parent (JSContext* ctx, JSValueConst value, int, JSValueConst*) {
++    auto* container = scriptable_container (value);
++    if (!container) return JS_ThrowTypeError (ctx, "Invalid layer");
++    const auto parentId = container->object.getObject ().parent;
++    if (!parentId) return JS_NULL;
++    auto* parent = dynamic_cast<const ScriptableObject*> (container->object.getScene ().getObject (*parentId));
++    return parent ? container->adapter.instantiate (*const_cast<ScriptableObject*> (parent)) : JS_NULL;
++}
++static JSValue scriptable_transform (JSContext* ctx, JSValueConst value, int, JSValueConst*) {
++    auto* container = scriptable_container (value);
++    if (!container) return JS_ThrowTypeError (ctx, "Invalid layer");
++    std::set<int> visiting;
++    const auto matrix = scriptable_world (container->object, visiting);
++    JSValue result = JS_NewObject (ctx);
++    JSValue values = JS_NewArray (ctx);
++    for (uint32_t i = 0; i < 16; ++i) JS_SetPropertyUint32 (ctx, values, i, JS_NewFloat64 (ctx, matrix[i/4][i%4]));
++    JS_SetPropertyStr (ctx, result, "m", values);
++    return result;
++}
++
++static JSValue texture_animation_operation (JSContext* ctx, JSValueConst, int argc, JSValueConst* argv,
++                                             int operation, JSValue* data) {
++    auto* container = scriptable_container (data[0]);
++    auto* image = container ? dynamic_cast<WallpaperEngine::Render::Objects::CRenderable*> (&container->object) : nullptr;
++    if (!image) return JS_ThrowTypeError (ctx, "Invalid image layer");
++    if (operation == 0) return JS_NewInt32 (ctx, image->getAnimationFrame ());
++    if (operation == 2) { image->setAnimationPlaying (false); return JS_UNDEFINED; }
++    if (operation == 3) { image->setAnimationPlaying (true); return JS_UNDEFINED; }
++    if (operation == 4) return JS_NewFloat64 (ctx, image->getAnimationRate ());
++    if (operation == 6) return JS_NewInt32 (ctx, image->getAnimationFrameCount ());
++    if (operation == 7) return JS_NewBool (ctx, image->isAnimationPlaying ());
++    double number;
++    if (argc < 1 || JS_ToFloat64 (ctx, &number, argv[0]) < 0 || !std::isfinite (number))
++        return JS_ThrowTypeError (ctx, "Animation requires a finite number");
++    if (operation == 1) image->setAnimationFrame (number);
++    if (operation == 5) image->setAnimationRate (number);
++    return JS_UNDEFINED;
++}
++static JSValue scriptable_texture_animation (JSContext* ctx, JSValueConst value, int, JSValueConst*) {
++    auto* container = scriptable_container (value);
++    auto* image = container ? dynamic_cast<WallpaperEngine::Render::Objects::CRenderable*> (&container->object) : nullptr;
++    if (!image || !image->getTexture () || !image->getTexture ()->isAnimated ()) return JS_NULL;
++    JSValue result = JS_NewObject (ctx);
++    JSValue data[] = { value };
++    auto function = [&] (int operation, int arguments) {
++        return JS_NewCFunctionData (ctx, texture_animation_operation, arguments, operation, 1, data);
++    };
++    const char* methods[] = { "getFrame", "setFrame", "stop", "play" };
++    for (int i = 0; i < 4; ++i) JS_SetPropertyStr (ctx, result, methods[i], function (i, i == 1 ? 1 : 0));
++    JS_DefinePropertyGetSet (ctx, result, JS_NewAtom (ctx, "rate"), function (4, 0), function (5, 1), JS_PROP_ENUMERABLE);
++    JS_DefinePropertyGetSet (ctx, result, JS_NewAtom (ctx, "frameCount"), function (6, 0), JS_UNDEFINED, JS_PROP_ENUMERABLE);
++    JS_DefinePropertyGetSet (ctx, result, JS_NewAtom (ctx, "playing"), function (7, 0), JS_UNDEFINED, JS_PROP_ENUMERABLE);
++    return result;
++}
++
+ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver) {
+     JSClassID classId = 0;
+ 
+@@ -37,11 +121,21 @@
+ 
+     ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
+ 
++    if (std::strcmp (name, "getTextureAnimation") == 0) return JS_NewCFunction (ctx, scriptable_texture_animation, "getTextureAnimation", 0);
++    if (std::strcmp (name, "getParent") == 0) return JS_NewCFunction (ctx, scriptable_parent, "getParent", 0);
++    if (std::strcmp (name, "getTransformMatrix") == 0) return JS_NewCFunction (ctx, scriptable_transform, "getTransformMatrix", 0);
+     if (std::strcmp (name, "name") == 0) return JS_NewString (ctx, container->object.getObject ().name.c_str ());
+     if (std::strcmp (name, "id") == 0) return JS_NewInt32 (ctx, container->object.getId ());
+     const auto& properties = container->object.getProperties ();
+     const auto it = properties.find (name);
+-    if (it == properties.end ()) return JS_UNDEFINED;
++    if (it == properties.end ()) {
++        JSPropertyDescriptor descriptor;
++        const int found = JS_GetOwnProperty (ctx, &descriptor, obj_val, atom);
++        if (found <= 0) return found < 0 ? JS_EXCEPTION : JS_UNDEFINED;
++        JS_FreeValue (ctx, descriptor.getter);
++        JS_FreeValue (ctx, descriptor.setter);
++        return descriptor.value;
++    }
+     return container->adapter.getEngine ().dynamicToJs (it->second.value);
+ }
+ 
+@@ -63,6 +157,13 @@
+     }
+ 
+     ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
++    if (!container->object.getProperties ().contains (name)) {
++        if (std::strcmp (name, "id") == 0 || std::strcmp (name, "name") == 0) {
++            JS_ThrowTypeError (ctx, "Layer identity is read-only");
++            return -1;
++        }
++        return JS_DefinePropertyValue (ctx, obj_val, atom, JS_DupValue (ctx, val), JS_PROP_C_W_E);
++    }
+     try {
+         auto& property = container->object.getProperty (name);
+         jsToDynamicValue (ctx, val, property);
+@@ -99,15 +200,21 @@
+ }
+ 
+ JSValue ScriptableObjectAdapter::instantiate (ScriptableObject& object) {
++    const auto cached = m_instances.find (&object);
++    if (cached != m_instances.end ()) return JS_DupValue (m_engine.getContext (), cached->second);
+     JSValue result = this->ObjectAdapter::instantiate (object);
+     JS_SetOpaque (
+ 	result,
+ 	new OpaqueScriptableObjectAdapter { .magic = SCRIPTABLE_OPAQUE_MAGIC, .adapter = *this, .object = object }
+     );
+ 
++    m_instances.emplace (&object, JS_DupValue (m_engine.getContext (), result));
+     return result;
+ }
+ 
+ JSValue ScriptableObjectAdapter::instantiate (DynamicValue& value) {
+     throw std::runtime_error ("Cannot create a ScriptableObject instance from a DynamicValue");
+-}
+\ No newline at end of file
++}
++ScriptableObjectAdapter::~ScriptableObjectAdapter () {
++    for (const auto& [object, instance] : m_instances) JS_FreeValue (m_engine.getContext (), instance);
++}
+diff --git a/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h b/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h
+--- a/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h
++++ b/src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h
+@@ -1,17 +1,20 @@
+ #pragma once
+ 
+ #include "ObjectAdapter.h"
++#include <map>
+ 
+ namespace WallpaperEngine::Scripting::Adapters {
+ class ScriptableObjectAdapter : public ObjectAdapter {
+ public:
+     explicit ScriptableObjectAdapter (ScriptEngine& engine, std::string name);
++    ~ScriptableObjectAdapter () override;
+ 
+     ScriptableObject* unwrap (JSValueConst value) const;
+     JSValue instantiate (ScriptableObject& object) override;
+     JSValue instantiate (Data::Model::DynamicValue& value) override;
+ 
+ private:
++    std::map<ScriptableObject*, JSValue> m_instances;
+     JSClassExoticMethods m_exoticMethods;
+     std::string m_name;
+ };
+diff --git a/src/WallpaperEngine/Scripting/Adapters/VectorAdapter.cpp b/src/WallpaperEngine/Scripting/Adapters/VectorAdapter.cpp
+--- a/src/WallpaperEngine/Scripting/Adapters/VectorAdapter.cpp
++++ b/src/WallpaperEngine/Scripting/Adapters/VectorAdapter.cpp
+@@ -199,6 +199,32 @@
+ template JSValue vector_property_get<2> (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver);
+ template JSValue vector_property_get<3> (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver);
+ template JSValue vector_property_get<4> (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver);
++
++template <int components>
++int vector_own_property (JSContext* ctx, JSPropertyDescriptor* desc, JSValueConst object, JSAtom atom) {
++    const char* name = JS_AtomToCString (ctx, atom);
++    if (!name) return -1;
++    const char* componentsNames = "xyzw";
++    const bool found = name[0] && !name[1] && std::string (componentsNames, components).find (name[0]) != std::string::npos;
++    JS_FreeCString (ctx, name);
++    if (!found) return 0;
++    if (desc) {
++        desc->flags = JS_PROP_C_W_E;
++        desc->value = vector_property_get<components> (ctx, object, atom, object);
++        desc->getter = JS_UNDEFINED;
++        desc->setter = JS_UNDEFINED;
++    }
++    return 1;
++}
++template <int components>
++int vector_own_names (JSContext* ctx, JSPropertyEnum** table, uint32_t* length, JSValueConst) {
++    *table = static_cast<JSPropertyEnum*> (js_malloc (ctx, components * sizeof (JSPropertyEnum)));
++    if (!*table) return -1;
++    const char* names[] = { "x", "y", "z", "w" };
++    for (int i = 0; i < components; ++i) (*table)[i] = { .is_enumerable = true, .atom = JS_NewAtom (ctx, names[i]) };
++    *length = components;
++    return 0;
++}
+ 
+ template <int components>
+ int vector_property_set (
+@@ -367,6 +393,14 @@
+     return JS_NewFloat64 (ctx, glm::length (vector_get<components> (container->value)));
+ }
+ 
++template <int components>
++JSValue vector_length_squared (JSContext* ctx, JSValueConst value, int, JSValueConst*) {
++    JSClassID id;
++    const auto* container = static_cast<VectorOpaqueContainer<components>*> (JS_GetAnyOpaque (value, &id));
++    VEC_MAGIC_CHECK_EXCEPTION (container, components);
++    const auto vector = vector_get<components> (container->value);
++    return JS_NewFloat64 (ctx, glm::dot (vector, vector));
++}
+ template JSValue vector_length<2> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+ template JSValue vector_length<3> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+ template JSValue vector_length<4> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+@@ -387,14 +421,31 @@
+ 
+     try {
+         auto value = vector_new<components> ();
+-        if (argc == 1) value = vector_get<components> (ctx, argv[0]);
+-        else if (argc >= components) {
+-            for (int i = 0; i < components; ++i) {
+-                double component;
+-                if (JS_ToFloat64 (ctx, &component, argv[i]) < 0) { JS_FreeValue (ctx, result); return JS_EXCEPTION; }
+-                value[i] = component;
++        if (argc == 1 && !JS_IsUndefined (argv[0])) value = vector_get<components> (ctx, argv[0]);
++        else if (argc == 1) { /* Explicit undefined uses the default zero vector. */ }
++        else if (argc > 0) {
++            int destination = 0;
++            int argument = 0;
++            if (JS_IsObject (argv[0])) {
++                const char* names[] = { "x", "y", "z", "w" };
++                for (; destination < components; ++destination) {
++                    JSValue part = JS_GetPropertyStr (ctx, argv[0], names[destination]);
++                    if (!JS_IsNumber (part)) { JS_FreeValue (ctx, part); break; }
++                    double number = 0;
++                    JS_ToFloat64 (ctx, &number, part);
++                    JS_FreeValue (ctx, part);
++                    value[destination] = number;
++                }
++                argument = 1;
+             }
+-        } else if (argc != 0) { JS_FreeValue (ctx, result); return JS_ThrowTypeError (ctx, "Invalid vector arguments"); }
++            for (; destination < components && argument < argc; ++destination, ++argument) {
++                double number = 0;
++                if (!JS_IsNumber (argv[argument]) || JS_ToFloat64 (ctx, &number, argv[argument]) < 0) {
++                    JS_FreeValue (ctx, result); return JS_ThrowTypeError (ctx, "Invalid vector component");
++                }
++                value[destination] = number;
++            }
++        }
+         container->value.update (value, DynamicValue::UpdateSource::Initialization);
+     } catch (const std::exception& e) { JS_FreeValue (ctx, result); return JS_ThrowTypeError (ctx, "%s", e.what ()); }
+ 
+@@ -488,7 +539,7 @@
+     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
+ 
+     newContainer->value.update (
+-	vector_get<components> (ctx, argv[0]) - vector_get<components> (container->value),
++	vector_get<components> (container->value) - vector_get<components> (ctx, argv[0]),
+ 	DynamicValue::UpdateSource::Initialization
+     );
+ 
+@@ -543,7 +594,7 @@
+     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
+ 
+     newContainer->value.update (
+-	vector_get<components> (ctx, argv[0]) / vector_get<components> (container->value),
++	vector_get<components> (container->value) / vector_get<components> (ctx, argv[0]),
+ 	DynamicValue::UpdateSource::Initialization
+     );
+ 
+@@ -564,17 +615,8 @@
+ 
+     VEC_MAGIC_CHECK_EXCEPTION (container, components);
+ 
+-    JSValue newVector = container->adapter.instantiate ();
+-    const auto* newContainer = static_cast<VectorOpaqueContainer<components>*> (JS_GetAnyOpaque (newVector, &classId));
+-
+-    VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
+-
+-    newContainer->value.update (
+-	glm::dot (vector_get<components> (ctx, argv[0]), vector_get<components> (container->value)),
+-	DynamicValue::UpdateSource::Initialization
+-    );
+-
+-    return newVector;
++    return JS_NewFloat64 (ctx, glm::dot (vector_get<components> (container->value), vector_get<components> (ctx, argv[0])));
++
+ }
+ 
+ template JSValue vector_dot<2> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+@@ -597,7 +639,7 @@
+     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
+ 
+     newContainer->value.update (
+-	glm::cross (vector_get<components> (ctx, argv[0]), vector_get<components> (container->value)),
++	glm::cross (vector_get<components> (container->value), vector_get<components> (ctx, argv[0])),
+ 	DynamicValue::UpdateSource::Initialization
+     );
+ 
+@@ -630,7 +672,7 @@
+     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
+ 
+     newContainer->value.update (
+-	glm::mix (vector_get<components> (ctx, argv[0]), vector_get<components> (container->value), amount),
++	glm::mix (vector_get<components> (container->value), vector_get<components> (ctx, argv[0]), amount),
+ 	DynamicValue::UpdateSource::Initialization
+     );
+ 
+@@ -817,12 +859,21 @@
+ template JSValue vector_toString<2> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+ template JSValue vector_toString<3> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+ template JSValue vector_toString<4> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
++
++// Never unwind native exceptions through the JavaScript VM's C frames.
++template <JSCFunction* function>
++JSValue checkedVectorCall (JSContext* ctx, JSValueConst value, int argc, JSValueConst* argv) {
++    try { return function (ctx, value, argc, argv); }
++    catch (const std::exception& error) { return JS_ThrowTypeError (ctx, "%s", error.what ()); }
++}
+ 
+ template <int components>
+ VectorAdapter<components>::VectorAdapter (ScriptEngine& engine) :
+     ObjectAdapter (engine), m_instanceId (++VectorAdapterInstanceId), m_name ("Vec" + std::to_string (components)),
+     m_exoticMethods (
+ 	{
++	    .get_own_property = vector_own_property<components>,
++            .get_own_property_names = vector_own_names<components>,
+ 	    .get_property = vector_property_get<components>,
+ 	    .set_property = vector_property_set<components>,
+ 	}
+@@ -849,85 +900,85 @@
+     JS_SetConstructor (this->m_engine.getContext (), ctor, m_prototype);
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "copy",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_copy<components>, "copy", 0), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_copy<components>>, "copy", 0), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "equals",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_equals<components>, "equals", 1), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_equals<components>>, "equals", 1), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "length",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_length<components>, "length", 0), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_length<components>>, "length", 0), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "lengthSqr",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_length<components>, "lengthSqr", 0), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_length_squared<components>>, "lengthSqr", 0), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "normalize",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_normalize<components>, "normalize", 0), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_normalize<components>>, "normalize", 0), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "add",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_add<components>, "add", 1), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_add<components>>, "add", 1), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "subtract",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_subtract<components>, "subtract", 1), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_subtract<components>>, "subtract", 1), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "multiply",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_multiply<components>, "multiply", 1), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_multiply<components>>, "multiply", 1), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "divide",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_divide<components>, "divide", 1), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_divide<components>>, "divide", 1), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "dot",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_dot<components>, "dot", 1), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_dot<components>>, "dot", 1), JS_PROP_ENUMERABLE
+     );
+     if constexpr (components == 3) {
+ 	JS_DefinePropertyValueStr (
+ 	    this->m_engine.getContext (), m_prototype, "cross",
+-	    JS_NewCFunction (this->m_engine.getContext (), vector_cross<components>, "cross", 1), JS_PROP_ENUMERABLE
++	    JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_cross<components>>, "cross", 1), JS_PROP_ENUMERABLE
+ 	);
+     }
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "mix",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_mix<components>, "mix", 2), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_mix<components>>, "mix", 2), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "min",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_min<components>, "min", 1), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_min<components>>, "min", 1), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "max",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_max<components>, "max", 1), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_max<components>>, "max", 1), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "abs",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_abs<components>, "abs", 0), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_abs<components>>, "abs", 0), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "sign",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_sign<components>, "sign", 0), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_sign<components>>, "sign", 0), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "round",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_round<components>, "round", 0), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_round<components>>, "round", 0), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "floor",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_floor<components>, "floor", 0), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_floor<components>>, "floor", 0), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "ceil",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_ceil<components>, "ceil", 0), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_ceil<components>>, "ceil", 0), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_engine.getContext (), m_prototype, "toString",
+-	JS_NewCFunction (this->m_engine.getContext (), vector_toString<components>, "toString", 0), JS_PROP_ENUMERABLE
++	JS_NewCFunction (this->m_engine.getContext (), checkedVectorCall<vector_toString<components>>, "toString", 0), JS_PROP_ENUMERABLE
+     );
+ 
+     JS_SetClassProto (this->m_engine.getContext (), this->m_classId, m_prototype);
+diff --git a/src/WallpaperEngine/Scripting/InputObject.cpp b/src/WallpaperEngine/Scripting/InputObject.cpp
+--- a/src/WallpaperEngine/Scripting/InputObject.cpp
++++ b/src/WallpaperEngine/Scripting/InputObject.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "EngineObject.h"
+ #include "ScriptEngine.h"
++#include "WallpaperEngine/Render/RenderContext.h"
+ #include "WallpaperEngine/Render/Wallpapers/CScene.h"
+ 
+ using namespace WallpaperEngine::Scripting;
+@@ -10,26 +11,32 @@
+     JSClassID classId;
+     auto* input = static_cast<InputObject*> (JS_GetAnyOpaque (this_val, &classId));
+ 
+-    // TODO: PROPERLY IMPLEMENT THIS
+-    return input->getScene ().getScriptEngine ().getAdapters ().vec3->instantiate ();
++    const auto position = *input->getScene ().getMousePosition ();
++    JSValue result = input->getScene ().getScriptEngine ().getAdapters ().vec3->instantiate ();
++    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, position.x * input->getScene ().getWidth ()));
++    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, position.y * input->getScene ().getHeight ()));
++    return result;
+ }
+ 
+ JSValue get_cursor_screen_position (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+     JSClassID classId;
+     auto* input = static_cast<InputObject*> (JS_GetAnyOpaque (this_val, &classId));
+-    auto position = input->getScene ().getMousePositionNormalized ();
++    auto position = input->getScene ().getContext ().getInputContext ().getMouseInput ().position ();
++    const auto size = input->getScene ().getContext ().getDriver ().getFramebufferSize ();
+ 
+     JSValue result = input->getScene ().getScriptEngine ().getAdapters ().vec2->instantiate ();
+ 
+-    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, position->x));
+-    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, position->y));
++    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, position.x));
++    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, size.y - position.y));
+ 
+     return result;
+ }
+ 
+ JSValue get_cursor_left_down (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+-    // TODO: IMPLEMENT THIS
+-    return JS_NewBool (ctx, false);
++    JSClassID classId;
++    auto* input = static_cast<InputObject*> (JS_GetAnyOpaque (this_val, &classId));
++    const auto state = input->getScene ().getContext ().getInputContext ().getMouseInput ().leftClick ();
++    return JS_NewBool (ctx, state == WallpaperEngine::Input::Clicked);
+ }
+ 
+ JSValue input_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
+diff --git a/src/WallpaperEngine/Scripting/ScriptEngine.cpp b/src/WallpaperEngine/Scripting/ScriptEngine.cpp
+--- a/src/WallpaperEngine/Scripting/ScriptEngine.cpp
++++ b/src/WallpaperEngine/Scripting/ScriptEngine.cpp
+@@ -257,7 +257,7 @@
+ 	this->m_context, this->m_globalThis, "thisScene", this->m_sceneObject->getInstance (), JS_PROP_ENUMERABLE
+     );
+     JS_DefinePropertyValueStr (
+-	this->m_context, this->m_globalThis, "console", this->m_consoleObject->getInstance (), JS_PROP_ENUMERABLE
++	this->m_context, this->m_globalThis, "console", this->m_consoleObject->getInstance (), JS_PROP_C_W_E
+     );
+     JS_DefinePropertyValueStr (
+ 	this->m_context, this->m_globalThis, "shared", JS_NewObject (this->m_context), JS_PROP_ENUMERABLE
+@@ -611,6 +611,19 @@
+     this->m_scriptOrder.push_back (key);
+ }
+ 
++void ScriptEngine::forgetObject (const ScriptableObject& object) {
++    // A renderer can fail setup after its constructor has queued property scripts.
++    // Remove these references before the layer and its DynamicValues are released.
++    if (m_shuttingDown) return;
++    for (auto it = m_scriptOrder.begin (); it != m_scriptOrder.end ();) {
++        auto module = m_scriptModules.find (*it);
++        if (module == m_scriptModules.end () || module->second.object != &object) { ++it; continue; }
++        JS_FreeValue (m_context, module->second.module);
++        m_scriptModules.erase (module);
++        it = m_scriptOrder.erase (it);
++    }
++}
++
+ void ScriptEngine::loadScripts () {
+     // Evaluate after the scene graph is complete, so top-level getLayer calls can resolve siblings.
+     for (size_t i = 0; i < m_scriptOrder.size (); ++i) {
+@@ -662,17 +675,18 @@
+         this->m_runningModule = &module;
+         JS_SetPropertyStr (this->m_context, this->m_globalThis, "thisLayer", this->m_adapters.object->instantiate (*module.object));
+         module.initialized = true;
+-        JSValue properties = JS_GetPropertyStr (m_context, m_engineObject->getInstance (), "userProperties");
+-        JSValue applied = this->call (module.module, 1, &properties, "applyUserProperties");
+-        if (JS_IsException (applied)) logJSException (m_context, "applyUserProperties");
+-        JS_FreeValue (m_context, properties);
+-        JS_FreeValue (m_context, applied);
+         JSValue argument = this->dynamicToJs (module.value);
+         JSValue result = this->call (module.module, 1, &argument, "init");
+         if (JS_IsException (result)) logJSException (this->m_context, "property init");
+         else jsToDynamicValue (this->m_context, result, module.value);
+         JS_FreeValue (this->m_context, argument);
+         JS_FreeValue (this->m_context, result);
++        JSValue properties = JS_GetPropertyStr (m_context, m_engineObject->getInstance (), "userProperties");
++        JSValue applied = this->call (module.module, 1, &properties, "applyUserProperties");
++        if (JS_IsException (applied)) logJSException (m_context, "applyUserProperties");
++        JS_FreeValue (m_context, properties);
++        JS_FreeValue (m_context, applied);
++
+     }
+     this->m_engineObject->tick ();
+     const size_t count = this->m_scriptOrder.size ();
+diff --git a/src/WallpaperEngine/Scripting/ScriptEngine.h b/src/WallpaperEngine/Scripting/ScriptEngine.h
+--- a/src/WallpaperEngine/Scripting/ScriptEngine.h
++++ b/src/WallpaperEngine/Scripting/ScriptEngine.h
+@@ -86,6 +86,7 @@
+      */
+     void tick ();
+     void shutdown ();
++    void forgetObject (const ScriptableObject& object);
+ 
+     // -------------------------------------------------------------------
+     // Layer-script API (Phase 2 — dynamic text)
+diff --git a/src/WallpaperEngine/Scripting/ScriptableObject.cpp b/src/WallpaperEngine/Scripting/ScriptableObject.cpp
+--- a/src/WallpaperEngine/Scripting/ScriptableObject.cpp
++++ b/src/WallpaperEngine/Scripting/ScriptableObject.cpp
+@@ -18,6 +18,7 @@
+ }
+ 
+ ScriptableObject::~ScriptableObject () {
++    getScene ().getScriptEngine ().forgetObject (*this);
+     for (auto& disconnect : m_disconnectors) disconnect ();
+ }
+ 
+@@ -37,6 +38,27 @@
+ 
+ void ScriptableObject::registerProperty (const std::string& name, DynamicValue& value) {
+     DynamicValue* scriptValue = &value;
++    if (name == "color") {
++        auto color = std::make_unique<DynamicValue> (value.getVec3 ());
++        if (value.getScriptSource ()) color->setScriptSource (*value.getScriptSource ());
++        color->setProperties (std::move (value.getProperties ()));
++        auto* target = color.get ();
++        auto updating = std::make_shared<bool> (false);
++        m_disconnectors.push_back (target->listen ([&value, updating] (const DynamicValue& current, DynamicValue::UpdateSource source) {
++            if (*updating) return;
++            *updating = true;
++            value.update (glm::vec4 (current.getVec3 (), value.getVec4 ().a), source);
++            *updating = false;
++        }));
++        m_disconnectors.push_back (value.listen ([target, updating] (const DynamicValue& current, DynamicValue::UpdateSource source) {
++            if (*updating) return;
++            *updating = true;
++            target->update (current.getVec3 (), source);
++            *updating = false;
++        }));
++        scriptValue = target;
++        m_scriptValues.push_back (std::move (color));
++    }
+     if (name == "angles") {
+         auto degrees = std::make_unique<DynamicValue> (glm::degrees (value.getVec3 ()));
+         if (value.getScriptSource ()) degrees->setScriptSource (*value.getScriptSource ());
